@@ -4,6 +4,9 @@
 # ESP-IDF build output
 build/
 core/build/
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
 sdkconfig.old
 *.bin
 *.elf
