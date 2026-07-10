@@ -1,0 +1,24 @@
+{
+  "ELEC_NEM_SUMMARY": [
+    {
+      "SETTLEMENTDATE": "2026-07-10T19:25:00",
+      "REGIONID": "VIC1",
+      "PRICE": 96.76914,
+      "PRICE_STATUS": "FIRM",
+      "TOTALDEMAND": 6240.12,
+      "NETINTERCHANGE": -420.5,
+      "INTERCONNECTORFLOWS": "[{\"name\":\"VIC1-NSW1\",\"value\":-311.2},{\"name\":\"V-SA\",\"value\":-109.3}]"
+    },
+    {
+      "SETTLEMENTDATE": "2026-07-10T19:25:00",
+      "REGIONID": "SA1",
+      "PRICE": -18.4,
+      "PRICE_STATUS": "FIRM",
+      "TOTALDEMAND": 1320.0,
+      "NETINTERCHANGE": 88.1,
+      "INTERCONNECTORFLOWS": "[{\"name\":\"V-SA\",\"value\":109.3}]"
+    }
+  ],
+  "ELEC_NEM_SUMMARY_PRICES": [],
+  "ELEC_NEM_SUMMARY_MARKET_NOTICE": []
+}
