@@ -50,17 +50,26 @@ PSRAM at 8 MB comfortably covers LVGL framebuffers plus per-region intraday hist
 **Direct-to-API from the device** — no backend server to run or maintain. The data layer is
 written behind a single interface so a proxy can be introduced later without touching the UI.
 
-Two public sources, both free and login-free:
+Data sources (verified against the live feeds, 2026-07):
 
-- **AEMO `ELEC_NEM_SUMMARY`** (compact JSON) — live per-region spot price, demand and net
-  interconnector flow. Small and device-friendly; this drives the headline numbers and the
-  glance strip. Polled every **60 s**.
-- **OpenNEM API** — intraday price/demand history and generation mix by fuel type per region.
-  Larger payloads; used for the drill-in screens. Refreshed every **5 min** (NEM dispatch
-  cadence).
+- **AEMO `ELEC_NEM_SUMMARY`** (compact JSON, **no API key**) — per-region spot price
+  (`PRICE`), demand (`TOTALDEMAND`), net interchange (`NETINTERCHANGE`), and per-interconnector
+  flows (`INTERCONNECTORFLOWS`, an embedded JSON string). One login-free source drives the
+  headline numbers, the glance strip, **and** the interconnector drill screen. Polled every
+  **60 s**.
+- **Intraday history is self-accumulated** — because we poll AEMO every 60 s, the device buckets
+  its own samples into today's price/demand curves (288 five-minute slots, reset at day
+  rollover). No history API is needed.
+- **OpenElectricity API** (formerly OpenNEM) — the **only** keyed dependency, used solely for
+  the **generation fuel mix**. Endpoint `GET /v4/data/network/NEM?metrics=power&
+  primary_grouping=network_region&secondary_grouping=fueltech` with an `Authorization: Bearer`
+  key stored in config. The key is a service credential the user obtains once at
+  platform.openelectricity.org.au — not a personal account login. Refreshed every **5 min**.
+  The dashboard degrades gracefully without it (mix panel shows "—"); everything else works
+  key-free.
 
-Streaming JSON parsing keeps peak memory bounded; only the fields the UI needs are extracted
-into normalized structs.
+Streaming/bounded JSON parsing keeps peak memory in check; only the fields the UI needs are
+extracted into fixed-size normalized structs.
 
 ### Alert thresholds (defaults, all configurable on-device)
 
@@ -171,6 +180,6 @@ amber→red = high/spike**. Live generation mix shown as a stacked bar
 ## 10. Open items to confirm during planning
 
 - Exact Waveshare ESP-IDF driver versions / board-support commit to base bring-up on.
-- Whether OpenNEM's per-region current endpoints cover generation mix + interconnectors at the
-  cadence we want, or whether a second AEMO feed is needed for flows.
+- OpenElectricity free-tier rate limits / cadence for the fuel-mix endpoint, and how the API
+  key is entered (captive portal field vs on-screen).
 - Final chime sounds (short WAV assets vs synthesized tones).
