@@ -19,6 +19,7 @@ target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE)
 add_library(nem_core STATIC
   src/regions.c
   src/config.c
+  src/timeutil.c
 )
 target_include_directories(nem_core PUBLIC include)
 target_link_libraries(nem_core PUBLIC cjson)
@@ -37,3 +38,4 @@ endfunction()
 
 nem_add_test(test_regions)
 nem_add_test(test_config)
+nem_add_test(test_timeutil)
