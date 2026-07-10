@@ -1,0 +1,14 @@
+# Brainstorming visual-companion scratch (persisted mockups, not source)
+.superpowers/
+
+# ESP-IDF build output
+build/
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
