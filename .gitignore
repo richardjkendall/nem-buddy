@@ -3,6 +3,7 @@
 
 # ESP-IDF build output
 build/
+core/build/
 sdkconfig.old
 *.bin
 *.elf
