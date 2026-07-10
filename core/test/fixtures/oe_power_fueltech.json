@@ -1,0 +1,17 @@
+{
+  "version": "4.5.5",
+  "success": true,
+  "data": [
+    { "network_region": "VIC", "fueltech": "coal_brown", "columns": ["timestamp","value"],
+      "results": [["2026-07-10T19:20:00Z", 2000.0], ["2026-07-10T19:25:00Z", 1900.0]] },
+    { "network_region": "VIC", "fueltech": "wind", "columns": ["timestamp","value"],
+      "results": [["2026-07-10T19:25:00Z", 1300.0]] },
+    { "network_region": "VIC", "fueltech": "solar_rooftop", "columns": ["timestamp","value"],
+      "results": [["2026-07-10T19:25:00Z", 300.0]] },
+    { "network_region": "VIC", "fueltech": "battery_charging", "columns": ["timestamp","value"],
+      "results": [["2026-07-10T19:25:00Z", 150.0]] },
+    { "network_region": "SA",  "fueltech": "wind", "columns": ["timestamp","value"],
+      "results": [["2026-07-10T19:25:00Z", 900.0]] }
+  ],
+  "total_records": 5
+}
