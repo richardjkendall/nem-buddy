@@ -183,3 +183,8 @@ amber→red = high/spike**. Live generation mix shown as a stacked bar
 - OpenElectricity free-tier rate limits / cadence for the fuel-mix endpoint, and how the API
   key is entered (captive portal field vs on-screen).
 - Final chime sounds (short WAV assets vs synthesized tones).
+- **Memory placement (from Plan 1 review):** the `nem_history_t` struct is ~24 KB (5 regions
+  × 288 slots × two `double` arrays + a `bool` array). On the ESP-IDF target it must be
+  allocated statically or from the heap/PSRAM — never on a FreeRTOS task stack (typically
+  4–8 KB). Other core structs are small (`nem_snapshot_t` ~1.2 KB, `nem_region_mix_t` ~0.4 KB,
+  `nem_alert_state_t` ~30 B).
