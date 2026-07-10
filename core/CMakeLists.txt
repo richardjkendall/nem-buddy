@@ -24,6 +24,7 @@ add_library(nem_core STATIC
   src/history.c
   src/fuel.c
   src/oe_client.c
+  src/alerts.c
 )
 target_include_directories(nem_core PUBLIC include)
 target_link_libraries(nem_core PUBLIC cjson)
@@ -47,3 +48,4 @@ nem_add_test(test_aemo_client)
 nem_add_test(test_history)
 nem_add_test(test_fuel)
 nem_add_test(test_oe_client)
+nem_add_test(test_alerts)
