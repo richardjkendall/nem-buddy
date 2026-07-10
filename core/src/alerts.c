@@ -11,13 +11,15 @@ static int edge(nem_alert_state_t *st, int r, nem_alert_type_t t, bool cond,
                 double value, nem_alert_event_t *events, int max, int n) {
     if (cond) {
         if (!st->active[r][t]) {
-            st->active[r][t] = true;
             if (n < max) {
+                st->active[r][t] = true;
                 events[n].type = t;
                 events[n].region = (nem_region_t)r;
                 events[n].value = value;
                 return n + 1;
             }
+            /* Cap reached: leave the flag false so this alert re-fires
+               (deferred, not dropped) once buffer space is available. */
         }
     } else {
         st->active[r][t] = false;

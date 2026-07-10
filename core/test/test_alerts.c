@@ -88,6 +88,30 @@ static void test_high_renewable_needs_mix(void) {
     TEST_ASSERT_TRUE(found);
 }
 
+static void test_cap_defers_not_drops(void) {
+    nem_config_t cfg; nem_config_defaults(&cfg);
+    nem_alert_state_t st; nem_alerts_init(&st);
+    nem_alert_event_t ev[8];
+
+    /* Two regions spiking simultaneously (NSW is region 0, VIC is region 4). */
+    nem_snapshot_t s; memset(&s, 0, sizeof(s));
+    for (int i = 0; i < NEM_REGION_COUNT; i++) s.regions[i].region = (nem_region_t)i;
+    s.regions[NEM_REGION_NSW].valid = true; s.regions[NEM_REGION_NSW].price = 450.0;
+    s.regions[NEM_REGION_VIC].valid = true; s.regions[NEM_REGION_VIC].price = 450.0;
+
+    /* Cap of 1: only the first spiking region (NSW) is emitted this call. */
+    int n = nem_alerts_evaluate(&st, &cfg, &s, NULL, ev, 1);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT(NEM_REGION_NSW, ev[0].region);
+
+    /* Next call with room: the deferred region (VIC) fires now — not lost —
+       and NSW, already latched, does NOT re-fire. */
+    n = nem_alerts_evaluate(&st, &cfg, &s, NULL, ev, 8);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT(NEM_ALERT_SPIKE, ev[0].type);
+    TEST_ASSERT_EQUAL_INT(NEM_REGION_VIC, ev[0].region);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_spike_fires_once_then_debounces);
@@ -95,5 +119,6 @@ int main(void) {
     RUN_TEST(test_negative_price);
     RUN_TEST(test_high_demand_uses_configured_mark);
     RUN_TEST(test_high_renewable_needs_mix);
+    RUN_TEST(test_cap_defers_not_drops);
     return UNITY_END();
 }
