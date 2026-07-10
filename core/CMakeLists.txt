@@ -13,10 +13,12 @@ target_compile_options(cjson PRIVATE -w)   # don't fail our build on vendored wa
 add_library(unity STATIC third_party/unity.c)
 target_include_directories(unity PUBLIC third_party)
 target_compile_options(unity PRIVATE -w)
+target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE)
 
 # Our library — sources are added by each task as modules land.
 add_library(nem_core STATIC
   src/regions.c
+  src/config.c
 )
 target_include_directories(nem_core PUBLIC include)
 target_link_libraries(nem_core PUBLIC cjson)
@@ -34,3 +36,4 @@ function(nem_add_test name)
 endfunction()
 
 nem_add_test(test_regions)
+nem_add_test(test_config)
