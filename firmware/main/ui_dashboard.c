@@ -1,39 +1,37 @@
 #include "ui_dashboard.h"
 #include "ui_theme.h"
+#include "nem/config.h"
+#include <stdio.h>
 
-/* TODO(plan3): all values below are placeholders until the core data layer is wired in.
- * Colours are stored as raw hex (uint32_t) because lv_color_hex() is not a
- * compile-time constant and cannot appear in a file-scope initializer. */
-typedef struct { const char *name; int price; uint32_t color_hex; } region_chip_t;
+#define RIBBON_MAX (NEM_REGION_COUNT - 1)
 
-static const region_chip_t k_ribbon[] = {
-    { "NSW", 118, 0xe8e8ee },
-    { "QLD",  76, 0xe8e8ee },
-    { "SA",  -18, 0x37d67a },   /* negative -> green */
-    { "TAS",  64, 0xe8e8ee },
-};
+static struct {
+    lv_obj_t *region, *price, *unit, *demand_val, *renew_val;
+    lv_obj_t *chip_price[RIBBON_MAX];
+    nem_region_t chip_region[RIBBON_MAX];
+    int chip_n;
+} d;
 
-/* One generation-mix segment: proportional weight + colour (hex). */
-typedef struct { int pct; uint32_t color_hex; } mix_seg_t;
-static const mix_seg_t k_mix[] = {
-    { 32, 0x5a5a5a }, { 18, 0xe0a23b }, { 22, 0x37d67a },
-    { 16, 0xffd23f }, { 12, 0x4a9eff },
-};
-
-static void make_metric(lv_obj_t *parent, const char *label, const char *value,
-                        lv_color_t value_color, int y)
+static lv_color_t price_color(double p)
 {
-    lv_obj_t *l = lv_label_create(parent);
-    lv_label_set_text(l, label);
-    lv_obj_set_style_text_color(l, NEM_C_MUTED, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-    lv_obj_align(l, LV_ALIGN_TOP_RIGHT, 0, y);
+    if (p < 0)    return NEM_C_GREEN;   /* negative */
+    if (p > 1000) return NEM_C_RED;     /* extreme spike */
+    if (p > 300)  return NEM_C_AMBER;   /* spike */
+    return NEM_C_WHITE;
+}
 
-    lv_obj_t *v = lv_label_create(parent);
-    lv_label_set_text(v, value);
-    lv_obj_set_style_text_color(v, value_color, 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_20, 0);
-    lv_obj_align(v, LV_ALIGN_TOP_RIGHT, 0, y + 18);
+static lv_obj_t *mk(lv_obj_t *p, const lv_font_t *f, lv_color_t col, lv_align_t a, int x, int y)
+{
+    lv_obj_t *l = lv_label_create(p);
+    lv_obj_set_style_text_color(l, col, 0);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_obj_align(l, a, x, y);
+    return l;
+}
+
+static int round_dollar(double p)
+{
+    return (int)(p + (p < 0 ? -0.5 : 0.5));
 }
 
 void ui_dashboard_create(lv_obj_t *parent)
@@ -41,67 +39,47 @@ void ui_dashboard_create(lv_obj_t *parent)
     lv_obj_set_style_bg_color(parent, NEM_C_BG, 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    /* Safe-area inset: the AMOLED panel has rounded corners that clip content. */
     lv_obj_set_style_pad_all(parent, 20, 0);
 
-    /* ---- Top status row (centered to dodge both top corners) ---- */
-    lv_obj_t *status = lv_label_create(parent);
+    lv_obj_t *status = mk(parent, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_TOP_MID, 0, 0);
     lv_label_set_text(status, "NEM   LIVE");
-    lv_obj_set_style_text_color(status, NEM_C_MUTED, 0);
-    lv_obj_set_style_text_font(status, &lv_font_montserrat_14, 0);
-    lv_obj_align(status, LV_ALIGN_TOP_MID, 0, 0);
 
-    /* ---- Hero: region + big price ---- */
-    lv_obj_t *region = lv_label_create(parent);
-    lv_label_set_text(region, "VICTORIA");
-    lv_obj_set_style_text_color(region, NEM_C_BLUE, 0);
-    lv_obj_set_style_text_font(region, &lv_font_montserrat_26, 0);
-    lv_obj_align(region, LV_ALIGN_TOP_LEFT, 0, 30);
+    d.region = mk(parent, &lv_font_montserrat_26, NEM_C_BLUE, LV_ALIGN_TOP_LEFT, 0, 30);
+    lv_label_set_text(d.region, "—");
+    d.price  = mk(parent, &lv_font_montserrat_48, NEM_C_WHITE, LV_ALIGN_TOP_LEFT, 0, 62);
+    lv_label_set_text(d.price, "—");
+    d.unit   = mk(parent, &lv_font_montserrat_16, NEM_C_MUTED, LV_ALIGN_TOP_LEFT, 0, 122);
+    lv_label_set_text(d.unit, "$/MWh");
 
-    lv_obj_t *price = lv_label_create(parent);
-    lv_label_set_text(price, "$92");   /* TODO(plan3) */
-    lv_obj_set_style_text_color(price, NEM_C_WHITE, 0);
-    lv_obj_set_style_text_font(price, &lv_font_montserrat_48, 0);
-    lv_obj_align(price, LV_ALIGN_TOP_LEFT, 0, 62);
+    lv_obj_t *dl = mk(parent, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_TOP_RIGHT, 0, 34);
+    lv_label_set_text(dl, "DEMAND");
+    d.demand_val = mk(parent, &lv_font_montserrat_20, NEM_C_WHITE, LV_ALIGN_TOP_RIGHT, 0, 52);
+    lv_label_set_text(d.demand_val, "—");
+    lv_obj_t *rl = mk(parent, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_TOP_RIGHT, 0, 82);
+    lv_label_set_text(rl, "RENEWABLES");
+    d.renew_val = mk(parent, &lv_font_montserrat_20, NEM_C_GREEN, LV_ALIGN_TOP_RIGHT, 0, 100);
+    lv_label_set_text(d.renew_val, "—");   /* live in Task 3 */
 
-    lv_obj_t *unit = lv_label_create(parent);
-    lv_label_set_text(unit, "$/MWh  " LV_SYMBOL_DOWN " 14%");
-    lv_obj_set_style_text_color(unit, NEM_C_GREEN, 0);
-    lv_obj_set_style_text_font(unit, &lv_font_montserrat_16, 0);
-    lv_obj_align(unit, LV_ALIGN_TOP_LEFT, 0, 122);
-
-    make_metric(parent, "DEMAND", "6,240 MW", NEM_C_WHITE, 34);
-    make_metric(parent, "RENEWABLES", "41%", NEM_C_GREEN, 82);
-
-    /* ---- Generation-mix stacked bar ---- */
+    /* mix bar placeholder (populated live in Task 3) */
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_remove_style_all(bar);
     lv_obj_set_size(bar, 440, 12);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 168);
     lv_obj_set_style_radius(bar, 6, 0);
-    lv_obj_set_style_clip_corner(bar, true, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    for (size_t i = 0; i < sizeof(k_mix) / sizeof(k_mix[0]); i++) {
-        lv_obj_t *seg = lv_obj_create(bar);
-        lv_obj_remove_style_all(seg);
-        lv_obj_set_height(seg, LV_PCT(100));
-        lv_obj_set_flex_grow(seg, k_mix[i].pct); /* proportional width */
-        lv_obj_set_style_bg_color(seg, lv_color_hex(k_mix[i].color_hex), 0);
-        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
-    }
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x141416), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
 
-    /* ---- Bottom ribbon: 4 region chips (lifted off the bottom corners) ---- */
+    /* ribbon */
     lv_obj_t *ribbon = lv_obj_create(parent);
     lv_obj_remove_style_all(ribbon);
     lv_obj_set_size(ribbon, 440, 68);
     lv_obj_align(ribbon, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_set_flex_flow(ribbon, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(ribbon, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(ribbon, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(ribbon, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (size_t i = 0; i < sizeof(k_ribbon) / sizeof(k_ribbon[0]); i++) {
+    d.chip_n = 0;
+    for (int r = 0; r < NEM_REGION_COUNT && d.chip_n < RIBBON_MAX; r++) {
         lv_obj_t *chip = lv_obj_create(ribbon);
         lv_obj_remove_style_all(chip);
         lv_obj_set_size(chip, 102, 64);
@@ -110,17 +88,40 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_obj_set_style_radius(chip, 12, 0);
         lv_obj_clear_flag(chip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(chip, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(chip, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_flex_align(chip, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *nm = mk(chip, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(nm, "—");
+        lv_obj_t *pr = mk(chip, &lv_font_montserrat_20, NEM_C_WHITE, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(pr, "—");
+        lv_obj_set_user_data(chip, nm);   /* stash the name label for updates */
+        d.chip_price[d.chip_n] = pr;
+        d.chip_region[d.chip_n] = NEM_REGION_COUNT;
+        d.chip_n++;
+    }
+}
 
-        lv_obj_t *nm = lv_label_create(chip);
-        lv_label_set_text(nm, k_ribbon[i].name);
-        lv_obj_set_style_text_color(nm, NEM_C_MUTED, 0);
-        lv_obj_set_style_text_font(nm, &lv_font_montserrat_14, 0);
-
-        lv_obj_t *pr = lv_label_create(chip);
-        lv_label_set_text_fmt(pr, "$%d", k_ribbon[i].price);
-        lv_obj_set_style_text_color(pr, lv_color_hex(k_ribbon[i].color_hex), 0);
-        lv_obj_set_style_text_font(pr, &lv_font_montserrat_20, 0);
+void ui_dashboard_update(const nem_snapshot_t *snap, nem_region_t home)
+{
+    const nem_region_snapshot_t *h = &snap->regions[home];
+    lv_label_set_text(d.region, nem_region_name(home));
+    if (h->valid) {
+        lv_label_set_text_fmt(d.price, "$%d", round_dollar(h->price));
+        lv_obj_set_style_text_color(d.price, price_color(h->price), 0);
+        lv_label_set_text_fmt(d.demand_val, "%d MW", (int)(h->demand_mw + 0.5));
+    }
+    int ci = 0;
+    for (int r = 0; r < NEM_REGION_COUNT && ci < d.chip_n; r++) {
+        if (r == home) continue;
+        const nem_region_snapshot_t *rs = &snap->regions[r];
+        lv_obj_t *pr = d.chip_price[ci];
+        lv_obj_t *chip = lv_obj_get_parent(pr);
+        lv_obj_t *nm = (lv_obj_t *)lv_obj_get_user_data(chip);
+        lv_label_set_text(nm, nem_region_name((nem_region_t)r));
+        if (rs->valid) {
+            lv_label_set_text_fmt(pr, "$%d", round_dollar(rs->price));
+            lv_obj_set_style_text_color(pr, price_color(rs->price), 0);
+        }
+        d.chip_region[ci] = (nem_region_t)r;
+        ci++;
     }
 }
