@@ -15,6 +15,10 @@ sdkconfig.old
 
 # Local credentials (never commit)
 firmware/main/secrets.h
+
+# Python
+__pycache__/
+*.pyc
 *.bin
 *.elf
 *.map

@@ -5,18 +5,23 @@
 
 #define RIBBON_MAX (NEM_REGION_COUNT - 1)
 
+/* fuel colours in nem_fuel_t order: COAL,GAS,HYDRO,WIND,SOLAR,BATTERY,OTHER */
+static const uint32_t k_fuel_hex[NEM_FUEL_COUNT] = {
+    0x5a5a5a, 0xe0a23b, 0x4a9eff, 0x37d67a, 0xffd23f, 0xb06bff, 0x8a8a92
+};
+
 static struct {
     lv_obj_t *region, *price, *unit, *demand_val, *renew_val;
+    lv_obj_t *seg[NEM_FUEL_COUNT];
     lv_obj_t *chip_price[RIBBON_MAX];
-    nem_region_t chip_region[RIBBON_MAX];
     int chip_n;
 } d;
 
 static lv_color_t price_color(double p)
 {
-    if (p < 0)    return NEM_C_GREEN;   /* negative */
-    if (p > 1000) return NEM_C_RED;     /* extreme spike */
-    if (p > 300)  return NEM_C_AMBER;   /* spike */
+    if (p < 0)    return NEM_C_GREEN;
+    if (p > 1000) return NEM_C_RED;
+    if (p > 300)  return NEM_C_AMBER;
     return NEM_C_WHITE;
 }
 
@@ -29,10 +34,7 @@ static lv_obj_t *mk(lv_obj_t *p, const lv_font_t *f, lv_color_t col, lv_align_t 
     return l;
 }
 
-static int round_dollar(double p)
-{
-    return (int)(p + (p < 0 ? -0.5 : 0.5));
-}
+static int round_dollar(double p) { return (int)(p + (p < 0 ? -0.5 : 0.5)); }
 
 void ui_dashboard_create(lv_obj_t *parent)
 {
@@ -58,16 +60,28 @@ void ui_dashboard_create(lv_obj_t *parent)
     lv_obj_t *rl = mk(parent, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_TOP_RIGHT, 0, 82);
     lv_label_set_text(rl, "RENEWABLES");
     d.renew_val = mk(parent, &lv_font_montserrat_20, NEM_C_GREEN, LV_ALIGN_TOP_RIGHT, 0, 100);
-    lv_label_set_text(d.renew_val, "—");   /* live in Task 3 */
+    lv_label_set_text(d.renew_val, "—");
 
-    /* mix bar placeholder (populated live in Task 3) */
+    /* Generation-mix bar: one flex segment per fuel; widths set live from mix. */
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_remove_style_all(bar);
     lv_obj_set_size(bar, 440, 12);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 168);
     lv_obj_set_style_radius(bar, 6, 0);
+    lv_obj_set_style_clip_corner(bar, true, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x141416), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < NEM_FUEL_COUNT; i++) {
+        lv_obj_t *seg = lv_obj_create(bar);
+        lv_obj_remove_style_all(seg);
+        lv_obj_set_height(seg, LV_PCT(100));
+        lv_obj_set_flex_grow(seg, 0);
+        lv_obj_set_style_bg_color(seg, lv_color_hex(k_fuel_hex[i]), 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        d.seg[i] = seg;
+    }
 
     /* ribbon */
     lv_obj_t *ribbon = lv_obj_create(parent);
@@ -93,14 +107,13 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_label_set_text(nm, "—");
         lv_obj_t *pr = mk(chip, &lv_font_montserrat_20, NEM_C_WHITE, LV_ALIGN_CENTER, 0, 0);
         lv_label_set_text(pr, "—");
-        lv_obj_set_user_data(chip, nm);   /* stash the name label for updates */
+        lv_obj_set_user_data(chip, nm);
         d.chip_price[d.chip_n] = pr;
-        d.chip_region[d.chip_n] = NEM_REGION_COUNT;
         d.chip_n++;
     }
 }
 
-void ui_dashboard_update(const nem_snapshot_t *snap, nem_region_t home)
+void ui_dashboard_update(const nem_snapshot_t *snap, const nem_fuel_mix_t *mix, nem_region_t home)
 {
     const nem_region_snapshot_t *h = &snap->regions[home];
     lv_label_set_text(d.region, nem_region_name(home));
@@ -109,6 +122,13 @@ void ui_dashboard_update(const nem_snapshot_t *snap, nem_region_t home)
         lv_obj_set_style_text_color(d.price, price_color(h->price), 0);
         lv_label_set_text_fmt(d.demand_val, "%d MW", (int)(h->demand_mw + 0.5));
     }
+
+    if (mix && mix->valid) {
+        for (int i = 0; i < NEM_FUEL_COUNT; i++)
+            lv_obj_set_flex_grow(d.seg[i], (int32_t)(mix->mw[i] + 0.5));
+        lv_label_set_text_fmt(d.renew_val, "%d%%", (int)(mix->renewable_fraction * 100 + 0.5));
+    }
+
     int ci = 0;
     for (int r = 0; r < NEM_REGION_COUNT && ci < d.chip_n; r++) {
         if (r == home) continue;
@@ -121,7 +141,6 @@ void ui_dashboard_update(const nem_snapshot_t *snap, nem_region_t home)
             lv_label_set_text_fmt(pr, "$%d", round_dollar(rs->price));
             lv_obj_set_style_text_color(pr, price_color(rs->price), 0);
         }
-        d.chip_region[ci] = (nem_region_t)r;
         ci++;
     }
 }

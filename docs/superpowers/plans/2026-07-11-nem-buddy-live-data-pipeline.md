@@ -6,7 +6,21 @@
 
 **Architecture:** `core/` is wrapped as an ESP-IDF component (its `src/*.c` compiled against ESP-IDF's bundled cJSON; the host-test `third_party/cJSON` is not used on-device). A single **data task** connects WiFi (STA), then loops: fetch AEMO every 60s and OpenElectricity every 5min, parse into `nem_snapshot_t` / `nem_region_mix_t`, accumulate `nem_history`, and push values into the dashboard under `bsp_display_lock()`. WiFi/API credentials live in a gitignored `secrets.h` (replaced by 3b's captive portal later). Home region is VIC (from `nem_config_defaults`) until 3b adds settings.
 
-**Tech Stack:** ESP-IDF v5.5, LVGL v9, `esp_wifi`, `esp_http_client` + `esp_crt_bundle` (TLS), ESP-IDF `json` (cJSON), the `core/` library.
+**Tech Stack:** ESP-IDF v5.5, LVGL v9, `esp_wifi`, `esp_http_client`, ESP-IDF `json` (cJSON), the `core/` library.
+
+> **IMPLEMENTATION OUTCOME (2026-07-11): pivoted to the proxy.** On-device HTTPS
+> hit this board's internal-RAM ceiling: WiFi (~42 KB) + the QSPI panel's flush
+> bounce + a mbedtls TLS session don't fit in the ~53 KB of internal DMA RAM, so
+> either the display flushed white (`ESP_ERR_NO_MEM`) or the TLS read of the ~11 KB
+> response failed. Two lasting fixes came out of the debugging and are kept:
+> (1) **display fix** — BSP `buffer_height` 50→10 (smaller flush bounce) + trimmed
+> WiFi buffers, which alone made the panel render reliably alongside WiFi; and
+> (2) **architecture** — a small **plain-HTTP proxy** (`proxy/nem_proxy.py`) does the
+> HTTPS to AEMO + OpenElectricity, merges + trims to ~740 bytes, and the device
+> reads it over plain HTTP (no on-device TLS). Device parses the compact payload
+> with the host-tested `nem_proxy_parse` (`core/src/proxy_client.c`). Net result:
+> Tasks 2 + 3 (price/demand/ribbon + renewables/mix) are delivered together via the
+> proxy. The OE key lives in the proxy env, not on-device.
 
 ## Environment
 
@@ -563,16 +577,22 @@ git commit -m "feat(firmware): live AEMO data driving price/demand/ribbon"
 - Modify: `firmware/main/data_task.c` (OE fetch every 5 min)
 - Requires: `NEM_OE_API_KEY` set in `secrets.h`
 
-- [ ] **Step 1: HUMAN + VALIDATE — get the key and confirm the real OE response**
+**VALIDATED against the live API (2026-07-11) — ground truth:**
 
-Add your `NEM_OE_API_KEY` to `secrets.h`. Then validate the endpoint and payload from the host so we set query params + buffer size from reality, not guesses:
-```bash
-curl -s -H "Authorization: Bearer <KEY>" \
-  "https://api.openelectricity.org.au/v4/data/network/NEM?metrics=power&primary_grouping=network_region&secondary_grouping=fueltech" \
-  -o /tmp/oe.json -w "HTTP %{http_code} size %{size_download}B\n"
-python3 -c "import json;d=json.load(open('/tmp/oe.json'));print('keys',list(d));print('n_data',len(d.get('data',[])));import itertools;print('sample',d['data'][0] if d.get('data') else None)"
-```
-Record the exact URL that returns a small, current payload (add `&interval=5m` and a short date range if the default is large). Set `OE_BUF_SZ` to comfortably exceed the observed size (round up to the next 32 KB). If auth/shape differs from `nem_oe_parse_power`'s expectations, adjust the query — not the parser (the parser is host-tested).
+- Auth: `Authorization: Bearer <key>` works (key in `secrets.h`).
+- **Query MUST be date-bounded** or it returns ~2.27 MB (4 days). Use snake_case `date_start`/`date_end` (camelCase is ignored!). A ~20-min window → ~15 KB, ~4 points/series. Build the window from **AEMO's `SETTLEMENTDATE`** (already parsed) — no SNTP needed: `date_start = settlement - 20min`, `date_end = settlement + 5min`, formatted `YYYY-MM-DDTHH:MM:SS` (AEST-naive, as AEMO gives it).
+- **Real response shape differs from the docs** the Plan-1 parser was coded against. Real: `data` has ONE element with `.results[]`; each series is `{ "name":..., "columns": { "region":"VIC1", "fueltech":"solar_utility" }, "data": [[ts,val],...] }`. Region is the **long code `VIC1`** (use `nem_region_from_id`, not `from_short`). Take the **last** `data` point.
+- All 16 live fueltechs are covered by `nem_fueltech_map`; loads (`battery_charging`, `pumps`) skipped; aggregate `battery` is unmapped→skipped (avoids double-count with `battery_discharging`).
+- `OE_BUF_SZ` = 32 KB (comfortably over the ~15 KB windowed payload).
+
+- [ ] **Step 1a: Fix `core/` OE parser + timeutil to match the live API (host TDD)**
+
+This is a `core/` change (the documented shape was wrong). On the host build:
+1. Rewrite `nem_oe_parse_power` in `core/src/oe_client.c` to iterate `data[0].results[]`, read `columns.region` (via `nem_region_from_id`) + `columns.fueltech`, and take the last `data` point.
+2. Replace `core/test/fixtures/oe_power_fueltech.json` with the real nested shape (region `VIC1`, `columns`, `data`).
+3. Update `core/test/test_oe_client.c` expectations accordingly (keep the same asserted values/logic).
+4. Add `bool nem_format_iso8601(long long epoch, char out[20])` to `core/src/timeutil.c` (+ header + a round-trip test with `nem_parse_iso8601`) for building the OE query window.
+5. Run `ctest --test-dir core/build --output-on-failure` — all green before touching firmware.
 
 - [ ] **Step 2: Extend `ui_dashboard.h` update signature**
 
