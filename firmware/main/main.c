@@ -5,6 +5,7 @@
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "ui_dashboard.h"
+#include "wifi_sta.h"
 
 static const char *TAG = "nem-buddy";
 
@@ -20,4 +21,7 @@ void app_main(void)
     bsp_display_unlock();
 
     ESP_LOGI(TAG, "dashboard up");
+
+    if (wifi_sta_connect() == ESP_OK) ESP_LOGI(TAG, "WiFi connected");
+    else ESP_LOGE(TAG, "WiFi failed");
 }

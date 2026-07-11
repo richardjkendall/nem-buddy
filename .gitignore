@@ -12,6 +12,9 @@ sdkconfig.old
 # IDE / clangd index caches
 .cache/
 **/.cache/
+
+# Local credentials (never commit)
+firmware/main/secrets.h
 *.bin
 *.elf
 *.map
