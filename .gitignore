@@ -8,6 +8,10 @@ firmware/build/
 firmware/managed_components/
 firmware/sdkconfig
 sdkconfig.old
+
+# IDE / clangd index caches
+.cache/
+**/.cache/
 *.bin
 *.elf
 *.map
