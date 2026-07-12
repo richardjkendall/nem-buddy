@@ -13,10 +13,36 @@ static const char *TAG = "portal";
 static const wifi_ctrl_ap_t *s_aps;
 static int s_apn;
 
+/* Minimal HTML-escaper: writes a NUL-terminated escaped copy of src into
+ * dst, never exceeding cap bytes. Escapes & < > " ' so untrusted text
+ * (nearby SSIDs) and prior values can't break out of the markup. */
+static void html_escape(const char *src, char *dst, size_t cap) {
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o + 1 < cap; i++) {
+        const char *rep = NULL;
+        switch (src[i]) {
+            case '&':  rep = "&amp;";  break;
+            case '<':  rep = "&lt;";   break;
+            case '>':  rep = "&gt;";   break;
+            case '"':  rep = "&quot;"; break;
+            case '\'': rep = "&#39;";  break;
+        }
+        if (rep) {
+            size_t rl = strlen(rep);
+            if (o + rl >= cap) break;
+            memcpy(dst + o, rep, rl);
+            o += rl;
+        } else {
+            dst[o++] = src[i];
+        }
+    }
+    dst[o] = '\0';
+}
+
 static esp_err_t send_form(httpd_req_t *req, const char *err) {
     net_creds_t cur;
     net_creds_load(&cur);   /* for prefill; ignore return */
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req,
         "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
         "<title>NEM Buddy setup</title><style>"
@@ -36,9 +62,11 @@ static esp_err_t send_form(httpd_req_t *req, const char *err) {
         "<input type=hidden name=ssid id=s>"
         "<label>Wi-Fi network</label>"
         "<select id=sel onchange=\"oth.style.display=this.value=='__other__'?'block':'none'\">");
-    char row[128];
+    char row[256];
     for (int i = 0; i < s_apn; i++) {
-        snprintf(row, sizeof row, "<option>%s</option>", s_aps[i].ssid);
+        char esc[200];
+        html_escape(s_aps[i].ssid, esc, sizeof esc);
+        snprintf(row, sizeof row, "<option>%s</option>", esc);
         httpd_resp_sendstr_chunk(req, row);
     }
     httpd_resp_sendstr_chunk(req,
@@ -46,10 +74,13 @@ static esp_err_t send_form(httpd_req_t *req, const char *err) {
         "<input id=oth placeholder='hidden SSID' style='display:none'>"
         "<label>Password</label><input name=password type=password>"
         "<label>Proxy URL</label><input name=proxy_url value='");
-    httpd_resp_sendstr_chunk(req, cur.proxy_url);
+    char ebuf[800];
+    html_escape(cur.proxy_url, ebuf, sizeof ebuf);
+    httpd_resp_sendstr_chunk(req, ebuf);
     httpd_resp_sendstr_chunk(req,
         "'><label>Proxy token (optional)</label><input name=proxy_token value='");
-    httpd_resp_sendstr_chunk(req, cur.proxy_token);
+    html_escape(cur.proxy_token, ebuf, sizeof ebuf);
+    httpd_resp_sendstr_chunk(req, ebuf);
     httpd_resp_sendstr_chunk(req, "'><button>Save &amp; connect</button></form>");
     httpd_resp_sendstr_chunk(req, NULL);   /* end chunks */
     return ESP_OK;
@@ -66,7 +97,7 @@ static esp_err_t save_post(httpd_req_t *req) {
         total += r;
         if (total >= (int)sizeof(body) - 1) break;
     }
-    if (total < 0) return ESP_FAIL;
+    if (r < 0) return ESP_FAIL;
     body[total] = '\0';
 
     net_creds_t f;   /* net_creds_t == nem_prov_form_t */
@@ -75,7 +106,7 @@ static esp_err_t save_post(httpd_req_t *req) {
     if (!net_creds_save(&f))
         return send_form(req, "Could not save — please try again.");
 
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr(req,
         "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
         "<body style='font-family:sans-serif;text-align:center;margin-top:3rem'>"
