@@ -15,7 +15,7 @@ portal that captures WiFi + proxy config, persists it to NVS, and connects.
 ## Decisions
 
 1. **Trigger — self-healing fallback.** Enter the portal when NVS has no creds *or*
-   when an STA connect attempt fails after N retries. A wrong password or a vanished
+   when an STA connect attempt fails after **5** retries. A wrong password or a vanished
    network automatically falls back to the portal on the next boot. No manual factory
    reset required for the common re-provision case.
 2. **True captive portal.** SoftAP + HTTP server + a minimal DNS server that resolves
@@ -36,6 +36,10 @@ portal that captures WiFi + proxy config, persists it to NVS, and connects.
    "Saved — connecting…" → `esp_restart()`. The clean boot re-enters the state machine
    with creds present and connects STA. Avoids flaky in-place `APSTA→STA` mode
    transitions on this RAM-constrained board.
+7. **WPA2 setup AP with a fixed password.** The portal AP (`NEM-Buddy-XXXX`) is WPA2-PSK
+   with a fixed compile-time password (≥8 chars). Both the AP name and password are
+   displayed on the on-screen setup card so the user can join. Keeps the setup network
+   off open-network scanners.
 
 ## Out of scope (future plans)
 
@@ -71,17 +75,17 @@ AP); NVS init moves under `net_creds`/`net_manager`.
 ```
 BOOT
  └─ net_creds_load()  (NVS; if empty, seed from secrets.h)
-      ├─ creds present ──► STA_CONNECT (up to N retries)
+      ├─ creds present ──► STA_CONNECT (up to 5 retries)
       │                      ├─ success ──► CONNECTED ──► data_task fetch loop
       │                      └─ fail ─────► PORTAL
       └─ no creds ─────────────────────────► PORTAL
 
 PORTAL
  ├─ wifi_ctrl.scan()  → cache nearby SSIDs
- ├─ wifi_ctrl.ap_start("NEM-Buddy-XXXX")   (XXXX = last 2 MAC bytes)
+ ├─ wifi_ctrl.ap_start("NEM-Buddy-XXXX", WPA2 fixed pw)  (XXXX = last 2 MAC bytes)
  ├─ captive_dns start  (all A → 192.168.4.1)
  ├─ portal_http start  (form w/ scan list + prefilled proxy url/token)
- ├─ UI: setup card (AP name + "connect & open http://192.168.4.1")
+ ├─ UI: setup card (AP name + password + "connect & open http://192.168.4.1")
  └─ on POST /save:
        validate → net_creds_save() → UI "Saved — connecting…" → esp_restart()
 ```
@@ -91,8 +95,8 @@ PORTAL
   replaces today's `700ms` race hack, since WiFi is now brought up deliberately.
 - The fetch loop reads `proxy_url` + `proxy_token` from `net_creds` (token → `bearer`)
   instead of the `secrets.h` macros.
-- AP is open (no password); the form POST is the only write path and the payload is
-  non-sensitive.
+- AP is WPA2-PSK with a fixed compile-time password (shown on the setup card); the form
+  POST over that link is the only write path and the payload is non-sensitive.
 
 ## Portal HTTP
 
@@ -135,7 +139,8 @@ over-length/garbage → re-render form with inline error (stay in PORTAL).
 
 **On-board UAT (manual, flash & observe):**
 1. Fresh flash, NVS empty, no `secrets.h` creds → PORTAL; `NEM-Buddy-XXXX` visible;
-   captive sheet auto-pops; scan list shows real networks.
+   card shows the WPA2 password; joining with it auto-pops the captive sheet; scan list
+   shows real networks.
 2. Submit good creds → "Saved — connecting…" → reboot → CONNECTED → dashboard live.
 3. Submit wrong password → reboot → STA fails → back to PORTAL automatically.
 4. Power-cycle after success → straight to CONNECTED (NVS persisted).
