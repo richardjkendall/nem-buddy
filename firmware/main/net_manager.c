@@ -48,7 +48,14 @@ static void net_task(void *arg) {
     bsp_display_unlock();
 
     int n = 0;
-    wifi_ctrl_portal_start(ap, NEM_SETUP_AP_PASSWORD, s_aps, &n);
+    if (wifi_ctrl_portal_start(ap, NEM_SETUP_AP_PASSWORD, s_aps, &n) != ESP_OK) {
+        ESP_LOGE(TAG, "portal radio bring-up failed");
+        bsp_display_lock(-1);
+        ui_setup_status("Setup radio failed \xE2\x80\x94 restart device");
+        bsp_display_unlock();
+        vTaskDelete(NULL);
+        return;
+    }
     captive_dns_start();
     portal_http_start(s_aps, n);
     ESP_LOGI(TAG, "portal ready (%d APs); awaiting setup", n);
