@@ -70,6 +70,27 @@ static void test_parses_interconnectors_and_epoch(void) {
     free(json);
 }
 
+static void test_parses_history_curves(void) {
+    char *json = read_fixture("proxy_sample.json");
+    nem_history_t h;
+    TEST_ASSERT_TRUE(nem_proxy_parse_history(json, &h));
+
+    const nem_region_history_t *vic = &h.regions[NEM_REGION_VIC];
+    /* fixture VIC ph="19.2,,20.1" dh="7477,,7500": slots 0 and 2 filled, 1 gap */
+    TEST_ASSERT_TRUE(vic->filled[0]);
+    TEST_ASSERT_FALSE(vic->filled[1]);
+    TEST_ASSERT_TRUE(vic->filled[2]);
+    TEST_ASSERT_FALSE(vic->filled[3]);
+    TEST_ASSERT_EQUAL_DOUBLE(19.2, vic->price[0]);
+    TEST_ASSERT_EQUAL_DOUBLE(20.1, vic->price[2]);
+    TEST_ASSERT_EQUAL_DOUBLE(7477.0, vic->demand[0]);
+    TEST_ASSERT_EQUAL_DOUBLE(7500.0, vic->demand[2]);
+
+    /* SA has no ph/dh -> no filled slots */
+    TEST_ASSERT_FALSE(h.regions[NEM_REGION_SA].filled[0]);
+    free(json);
+}
+
 static void test_rejects_garbage(void) {
     nem_snapshot_t s; nem_region_mix_t m;
     TEST_ASSERT_FALSE(nem_proxy_parse("{}", &s, &m));
@@ -81,6 +102,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_parses_price_demand_and_mix);
     RUN_TEST(test_parses_interconnectors_and_epoch);
+    RUN_TEST(test_parses_history_curves);
     RUN_TEST(test_rejects_garbage);
     return UNITY_END();
 }

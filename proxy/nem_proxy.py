@@ -127,11 +127,59 @@ def fetch_oe(api_key, settlement_str):
     return out
 
 
-def build_payload(settle, aemo, oe):
+HIST_SLOTS = 288   # 5-min slots per day
+
+# Today's intraday curve, accumulated from the live poll. Indexed by 5-min slot
+# of day (0..287). Persists across device reflashes because it lives here.
+_hist = {rid: {"ph": [None] * HIST_SLOTS, "dh": [None] * HIST_SLOTS} for rid in REGIONS}
+_hist_day = [None]
+
+
+def record_history(settle, aemo):
+    """Fold this poll's price/demand into today's per-region curve, keyed on the
+    AEMO (AEST) settlement time. Resets on day rollover."""
+    if not settle:
+        return
+    try:
+        dt = datetime.strptime(settle, "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError):
+        return
+    if _hist_day[0] != dt.date():
+        _hist_day[0] = dt.date()
+        for rid in REGIONS:
+            _hist[rid]["ph"] = [None] * HIST_SLOTS
+            _hist[rid]["dh"] = [None] * HIST_SLOTS
+    slot = (dt.hour * 60 + dt.minute) // 5
+    if not (0 <= slot < HIST_SLOTS):
+        return
+    for rid in REGIONS:
+        a = aemo.get(rid)
+        if not a:
+            continue
+        _hist[rid]["ph"][slot] = round(a.get("price", 0.0), 1)
+        _hist[rid]["dh"][slot] = round(a.get("demand", 0.0))
+
+
+def _csv(vals):
+    return ",".join("" if v is None else str(v) for v in vals)
+
+
+def build_payload(settle, aemo, oe, hist=None):
+    hist = hist or {}
+    # Trim curves to the last filled 5-min slot (index == slot of day), so the
+    # payload stays small early in the day and grows toward ~288 by day's end.
+    cut = 0
+    for rid in REGIONS:
+        ph = hist.get(rid, {}).get("ph", [])
+        for i in range(len(ph) - 1, -1, -1):
+            if ph[i] is not None:
+                cut = max(cut, i + 1)
+                break
     regions = []
     for rid in REGIONS:
         a = aemo.get(rid, {})
         m = oe.get(rid, {}) if oe else {}
+        hd = hist.get(rid, {})
         regions.append({
             "id": rid,
             "price": round(a.get("price", 0.0), 2),
@@ -140,6 +188,8 @@ def build_payload(settle, aemo, oe):
             "ic": a.get("ic", []),
             "ren": m.get("ren", 0.0),
             "fuel": m.get("fuel", {f: 0 for f in FUELS}),
+            "ph": _csv(hd.get("ph", [])[:cut]),
+            "dh": _csv(hd.get("dh", [])[:cut]),
         })
     return {"t": settle or "", "regions": regions}
 
@@ -159,7 +209,8 @@ def refresh_loop(api_key):
                 except Exception as e:  # keep last-good OE
                     _cache["oe_err"] = str(e)
                     print("[proxy] OE fetch error:", e, file=sys.stderr)
-            payload = build_payload(settle, aemo, oe_cache)
+            record_history(settle, aemo)   # fold this poll into today's curve
+            payload = build_payload(settle, aemo, oe_cache, _hist)
             with _lock:
                 _cache["payload"] = payload
             print("[proxy] refreshed @", settle, "VIC $%.1f" %

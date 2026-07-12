@@ -1,9 +1,11 @@
 #include "nem/proxy_client.h"
 #include "nem/regions.h"
 #include "nem/timeutil.h"
+#include "nem/history.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* proxy fuel keys, in nem_fuel_t order (COAL,GAS,HYDRO,WIND,SOLAR,BATTERY,OTHER) */
 static const char *const FUEL_KEYS[NEM_FUEL_COUNT] = {
@@ -72,6 +74,52 @@ bool nem_proxy_parse(const char *json, nem_snapshot_t *snap, nem_region_mix_t *m
                 fm->total_mw += mw;
             }
         }
+        parsed++;
+    }
+    cJSON_Delete(root);
+    return parsed > 0;
+}
+
+/* Parse a comma-separated curve ("35.8,,36.1,...") into vals[]; empty token =
+ * gap. When `filled` is non-NULL, marks each present slot. Index == slot. */
+static void parse_curve(const char *csv, double *vals, bool *filled, int cap)
+{
+    if (!csv) return;
+    const char *p = csv;
+    int idx = 0;
+    while (idx < cap) {
+        if (*p != ',' && *p != '\0') {
+            vals[idx] = strtod(p, NULL);
+            if (filled) filled[idx] = true;
+        }
+        while (*p && *p != ',') p++;
+        if (*p == ',') { p++; idx++; } else break;
+    }
+}
+
+bool nem_proxy_parse_history(const char *json, nem_history_t *hist)
+{
+    nem_history_init(hist);
+    if (!json) return false;
+
+    cJSON *root = cJSON_Parse(json);
+    if (!root) return false;
+    const cJSON *regions = cJSON_GetObjectItemCaseSensitive(root, "regions");
+    if (!cJSON_IsArray(regions)) { cJSON_Delete(root); return false; }
+
+    int parsed = 0;
+    const cJSON *el = NULL;
+    cJSON_ArrayForEach(el, regions) {
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(el, "id");
+        if (!cJSON_IsString(id)) continue;
+        nem_region_t reg = nem_region_from_id(id->valuestring);
+        if (reg >= NEM_REGION_COUNT) continue;
+
+        const cJSON *ph = cJSON_GetObjectItemCaseSensitive(el, "ph");
+        const cJSON *dh = cJSON_GetObjectItemCaseSensitive(el, "dh");
+        nem_region_history_t *rh = &hist->regions[reg];
+        if (cJSON_IsString(ph)) parse_curve(ph->valuestring, rh->price,  rh->filled, NEM_HISTORY_SLOTS);
+        if (cJSON_IsString(dh)) parse_curve(dh->valuestring, rh->demand, NULL,       NEM_HISTORY_SLOTS);
         parsed++;
     }
     cJSON_Delete(root);

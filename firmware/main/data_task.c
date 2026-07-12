@@ -13,7 +13,7 @@
 #include "ui_drill.h"
 
 static const char *TAG = "data";
-#define PROXY_BUF_SZ (8 * 1024)
+#define PROXY_BUF_SZ (24 * 1024)   /* holds the intraday history curves too */
 
 static nem_history_t *s_hist;
 
@@ -43,9 +43,8 @@ static void data_task(void *arg)
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
-                long long epoch = snap.regions[cfg.home_region].settlement_epoch;
-                if (epoch > 0) nem_history_add(s_hist, &snap, epoch);
                 bsp_display_lock(-1);
+                nem_proxy_parse_history(buf, s_hist);   /* today's curve from the proxy */
                 ui_dashboard_update(&snap, &mix);
                 ui_drill_refresh();
                 bsp_display_unlock();
