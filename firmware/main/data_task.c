@@ -9,9 +9,12 @@
 #include "bsp/esp-bsp.h"
 #include "nem/proxy_client.h"
 #include "nem/config.h"
+#include "nem/history.h"
 
 static const char *TAG = "data";
 #define PROXY_BUF_SZ (8 * 1024)
+
+static nem_history_t *s_hist;
 
 static void data_task(void *arg)
 {
@@ -29,12 +32,18 @@ static void data_task(void *arg)
     char *buf = heap_caps_malloc(PROXY_BUF_SZ, MALLOC_CAP_SPIRAM);
     if (!buf) { ESP_LOGE(TAG, "no PSRAM buffer"); vTaskDelete(NULL); return; }
 
+    s_hist = heap_caps_malloc(sizeof(nem_history_t), MALLOC_CAP_SPIRAM);
+    if (!s_hist) { ESP_LOGE(TAG, "no PSRAM history"); vTaskDelete(NULL); return; }
+    nem_history_init(s_hist);
+
     for (;;) {
         int len = 0;
         if (nem_http_get(creds.proxy_url, bearer, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
+                long long epoch = snap.regions[cfg.home_region].settlement_epoch;
+                if (epoch > 0) nem_history_add(s_hist, &snap, epoch);
                 bsp_display_lock(-1);
                 ui_dashboard_update(&snap, &mix);
                 bsp_display_unlock();
@@ -52,4 +61,10 @@ static void data_task(void *arg)
 void data_task_start(void)
 {
     xTaskCreatePinnedToCore(data_task, "data", 8192, NULL, 5, NULL, tskNO_AFFINITY);
+}
+
+const nem_region_history_t *nem_history_of(nem_region_t region)
+{
+    if (!s_hist || region >= NEM_REGION_COUNT) return NULL;
+    return &s_hist->regions[region];
 }
