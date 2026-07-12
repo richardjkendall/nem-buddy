@@ -4,7 +4,7 @@
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "ui_dashboard.h"
-#include "data_task.h"
+#include "net_manager.h"
 
 static const char *TAG = "nem-buddy";
 
@@ -19,5 +19,5 @@ void app_main(void)
     ui_dashboard_create(lv_screen_active());
     bsp_display_unlock();
 
-    data_task_start();
+    net_manager_start();
 }
