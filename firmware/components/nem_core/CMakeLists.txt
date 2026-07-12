@@ -12,5 +12,6 @@ idf_component_register(
         "${CORE}/src/oe_client.c"
         "${CORE}/src/alerts.c"
         "${CORE}/src/proxy_client.c"
+        "${CORE}/src/provision.c"
     INCLUDE_DIRS "${CORE}/include"
     REQUIRES json)
