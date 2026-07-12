@@ -1,8 +1,7 @@
 #include "data_task.h"
-#include "wifi_sta.h"
+#include "net_creds.h"
 #include "net_fetch.h"
 #include "ui_dashboard.h"
-#include "secrets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -17,10 +16,14 @@ static const char *TAG = "data";
 static void data_task(void *arg)
 {
     (void)arg;
-    /* Let the initial dashboard fully render before WiFi init grabs internal DMA RAM. */
-    vTaskDelay(pdMS_TO_TICKS(700));
-
-    if (wifi_sta_connect() != ESP_OK) { ESP_LOGE(TAG, "no wifi; task exiting"); vTaskDelete(NULL); return; }
+    net_creds_t creds;
+    net_creds_load(&creds);
+    if (creds.proxy_url[0] == '\0') {
+        ESP_LOGW(TAG, "no proxy configured; data task idle");
+        vTaskDelete(NULL);
+        return;
+    }
+    const char *bearer = creds.proxy_token[0] ? creds.proxy_token : NULL;
 
     nem_config_t cfg; nem_config_defaults(&cfg);
     char *buf = heap_caps_malloc(PROXY_BUF_SZ, MALLOC_CAP_SPIRAM);
@@ -28,7 +31,7 @@ static void data_task(void *arg)
 
     for (;;) {
         int len = 0;
-        if (nem_http_get(NEM_PROXY_URL, NULL, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
+        if (nem_http_get(creds.proxy_url, bearer, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {

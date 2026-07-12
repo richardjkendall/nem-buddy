@@ -1,6 +1,8 @@
 #include "portal_http.h"
 #include "net_creds.h"
 #include "nem/provision.h"
+#include "ui_setup.h"
+#include "bsp/esp-bsp.h"
 #include <string.h>
 #include <stdio.h>
 #include "esp_http_server.h"
@@ -112,6 +114,9 @@ static esp_err_t save_post(httpd_req_t *req) {
         "<body style='font-family:sans-serif;text-align:center;margin-top:3rem'>"
         "<h2>Saved \xE2\x80\x94 connecting\xE2\x80\xA6</h2>"
         "<p>NEM Buddy will restart and join your network.</p>");
+    bsp_display_lock(-1);
+    ui_setup_status("Saved \xE2\x80\x94 connecting\xE2\x80\xA6");
+    bsp_display_unlock();
     ESP_LOGI(TAG, "creds saved; rebooting");
     vTaskDelay(pdMS_TO_TICKS(1200));   /* let the response flush */
     esp_restart();
