@@ -1,5 +1,6 @@
 #include "ui_dashboard.h"
 #include "ui_theme.h"
+#include "ui_drill.h"
 #include "nem/config.h"
 #include <stdio.h>
 
@@ -69,6 +70,12 @@ static void chip_clicked_cb(lv_event_t *e)
     }
 }
 
+static void hero_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_drill_show(ui_dashboard_hero_region());
+}
+
 void ui_dashboard_create(lv_obj_t *parent)
 {
     lv_obj_set_style_bg_color(parent, NEM_C_BG, 0);
@@ -119,6 +126,13 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
         d.seg[i] = seg;
     }
+
+    lv_obj_t *hero_hit = lv_obj_create(parent);
+    lv_obj_remove_style_all(hero_hit);
+    lv_obj_set_size(hero_hit, 440, 190);
+    lv_obj_align(hero_hit, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_add_flag(hero_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(hero_hit, hero_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     /* ribbon */
     lv_obj_t *ribbon = lv_obj_create(parent);

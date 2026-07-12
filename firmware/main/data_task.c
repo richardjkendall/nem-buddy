@@ -10,6 +10,7 @@
 #include "nem/proxy_client.h"
 #include "nem/config.h"
 #include "nem/history.h"
+#include "ui_drill.h"
 
 static const char *TAG = "data";
 #define PROXY_BUF_SZ (8 * 1024)
@@ -46,6 +47,7 @@ static void data_task(void *arg)
                 if (epoch > 0) nem_history_add(s_hist, &snap, epoch);
                 bsp_display_lock(-1);
                 ui_dashboard_update(&snap, &mix);
+                ui_drill_refresh();
                 bsp_display_unlock();
                 const nem_region_snapshot_t *h = &snap.regions[cfg.home_region];
                 ESP_LOGI(TAG, "ok: %s $%.1f  demand %.0f",

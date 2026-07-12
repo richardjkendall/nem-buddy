@@ -101,6 +101,7 @@ static void build_history_tile(lv_obj_t *t)
     lv_obj_set_style_size(c, 0, 0, LV_PART_INDICATOR);   /* hide point markers */
     s.hist_ser = lv_chart_add_series(c, NEM_C_BLUE, LV_CHART_AXIS_PRIMARY_Y);
     s.hist_chart = c;
+    lv_obj_remove_flag(s.hist_chart, LV_OBJ_FLAG_CLICKABLE);
 }
 
 static void build_mix_tile(lv_obj_t *t)
@@ -170,6 +171,7 @@ static void render_ic(void)
     const nem_snapshot_t *snap = ui_dashboard_snapshot();
     if (!snap) return;
     const nem_region_snapshot_t *rs = &snap->regions[s.region];
+    if (!rs->valid) { lv_label_set_text(s.ic_head, "--"); for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) lv_label_set_text(s.ic_rows[i], ""); return; }
     double ni = rs->net_interchange;
     lv_label_set_text_fmt(s.ic_head, "Net: %s %d MW",
                           ni >= 0 ? "exporting" : "importing", (int)(ni < 0 ? -ni : ni) );
@@ -226,6 +228,11 @@ void ui_drill_show(nem_region_t region)
     lv_obj_set_size(s.tv, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(s.tv, LV_OPA_TRANSP, 0);
     lv_obj_add_event_cb(s.tv, tv_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    /* LVGL v9's event_is_bubbled() re-checks LV_OBJ_FLAG_EVENT_BUBBLE on the
+     * *current* hop at every step up the chain (lv_obj_event.c), so the
+     * tileview itself also needs the flag for a tile's CLICKED to reach
+     * s.root, not just the tiles. */
+    lv_obj_add_flag(s.tv, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     s.tile[0] = lv_tileview_add_tile(s.tv, 0, 0, LV_DIR_RIGHT);
     s.tile[1] = lv_tileview_add_tile(s.tv, 1, 0, LV_DIR_HOR);
@@ -233,6 +240,8 @@ void ui_drill_show(nem_region_t region)
     build_history_tile(s.tile[0]);
     build_mix_tile(s.tile[1]);
     build_ic_tile(s.tile[2]);
+    for (int i = 0; i < N_TILES; i++)
+        lv_obj_add_flag(s.tile[i], LV_OBJ_FLAG_EVENT_BUBBLE);
 
     /* page dots */
     lv_obj_t *dots = lv_obj_create(s.root);
