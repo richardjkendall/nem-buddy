@@ -49,6 +49,47 @@ static void test_parse_ignores_unknown_and_last_wins(void) {
     TEST_ASSERT_EQUAL_STRING("Real", f.ssid);   /* later key overwrites earlier */
 }
 
+static void test_dns_reply_shape(void) {
+    /* Query: header (ID=0x1234, RD set, QD=1) + question www.example.com A IN */
+    unsigned char q[] = {
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        3, 'w','w','w', 7, 'e','x','a','m','p','l','e', 3, 'c','o','m', 0,
+        0x00, 0x01, 0x00, 0x01
+    };
+    unsigned char ip[4] = { 192, 168, 4, 1 };
+    unsigned char out[128];
+    int n = nem_provision_build_dns_reply(q, (int)sizeof q, ip, out, (int)sizeof out);
+
+    TEST_ASSERT_EQUAL_INT((int)sizeof q + 16, n);   /* query + 16-byte answer */
+    TEST_ASSERT_TRUE(out[2] & 0x80);                /* QR (response) bit set  */
+    TEST_ASSERT_EQUAL_UINT8(0x00, out[6]);          /* ANCOUNT hi             */
+    TEST_ASSERT_EQUAL_UINT8(0x01, out[7]);          /* ANCOUNT lo = 1         */
+    /* Answer begins right after the copied query. */
+    unsigned char *a = out + sizeof q;
+    TEST_ASSERT_EQUAL_UINT8(0xC0, a[0]);            /* name pointer           */
+    TEST_ASSERT_EQUAL_UINT8(0x0C, a[1]);            /* -> offset 12           */
+    TEST_ASSERT_EQUAL_UINT8(0x00, a[2]);            /* TYPE A hi              */
+    TEST_ASSERT_EQUAL_UINT8(0x01, a[3]);            /* TYPE A lo              */
+    /* Last 4 bytes are the IP. */
+    TEST_ASSERT_EQUAL_UINT8(192, out[n - 4]);
+    TEST_ASSERT_EQUAL_UINT8(168, out[n - 3]);
+    TEST_ASSERT_EQUAL_UINT8(4,   out[n - 2]);
+    TEST_ASSERT_EQUAL_UINT8(1,   out[n - 1]);
+}
+
+static void test_dns_reply_rejects_short_and_small_buf(void) {
+    unsigned char ip[4] = { 192, 168, 4, 1 };
+    unsigned char out[128];
+    unsigned char tiny[8] = {0};
+    TEST_ASSERT_EQUAL_INT(-1, nem_provision_build_dns_reply(tiny, 8, ip, out, sizeof out));
+
+    unsigned char q[] = {
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        3, 'w','w','w', 0, 0x00, 0x01, 0x00, 0x01
+    };
+    TEST_ASSERT_EQUAL_INT(-1, nem_provision_build_dns_reply(q, (int)sizeof q, ip, out, 10));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_parse_happy);
@@ -57,5 +98,7 @@ int main(void) {
     RUN_TEST(test_parse_empty_ssid_fails);
     RUN_TEST(test_parse_overlong_ssid_fails);
     RUN_TEST(test_parse_ignores_unknown_and_last_wins);
+    RUN_TEST(test_dns_reply_shape);
+    RUN_TEST(test_dns_reply_rejects_short_and_small_buf);
     return UNITY_END();
 }

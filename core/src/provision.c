@@ -61,3 +61,26 @@ bool nem_provision_parse_form(const char *body, size_t len, nem_prov_form_t *out
     }
     return out->ssid[0] != '\0' && !over;
 }
+
+int nem_provision_build_dns_reply(const unsigned char *query, int qlen,
+                                  const unsigned char ip[4],
+                                  unsigned char *out, int out_cap) {
+    if (!query || !out || qlen < 12) return -1;
+    if (qlen + 16 > out_cap) return -1;
+
+    memcpy(out, query, (size_t)qlen);
+    out[2] = (unsigned char)(query[2] | 0x80);  /* set QR, keep opcode/RD    */
+    out[3] = 0x80;                              /* RA=1, RCODE=0             */
+    out[6] = 0x00; out[7] = 0x01;               /* ANCOUNT = 1               */
+    out[8] = 0x00; out[9] = 0x00;               /* NSCOUNT = 0               */
+    out[10] = 0x00; out[11] = 0x00;             /* ARCOUNT = 0               */
+
+    unsigned char *p = out + qlen;
+    *p++ = 0xC0; *p++ = 0x0C;                    /* name -> question at off 12 */
+    *p++ = 0x00; *p++ = 0x01;                    /* TYPE A                     */
+    *p++ = 0x00; *p++ = 0x01;                    /* CLASS IN                   */
+    *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x3C;  /* TTL 60            */
+    *p++ = 0x00; *p++ = 0x04;                    /* RDLENGTH 4                 */
+    *p++ = ip[0]; *p++ = ip[1]; *p++ = ip[2]; *p++ = ip[3];
+    return (int)(p - out);
+}

@@ -22,6 +22,11 @@ typedef struct {
  * no field's decoded value exceeded its cap. */
 bool nem_provision_parse_form(const char *body, size_t len, nem_prov_form_t *out);
 
-/* (Task 2 adds nem_provision_build_dns_reply here.) */
+/* Build a DNS response answering the single-question query in `query` with an
+ * A record pointing at ip[4]. Writes into out[0..out_cap). Returns the reply
+ * length, or -1 if the query is too short or the buffer is too small. */
+int nem_provision_build_dns_reply(const unsigned char *query, int qlen,
+                                  const unsigned char ip[4],
+                                  unsigned char *out, int out_cap);
 
 #endif
