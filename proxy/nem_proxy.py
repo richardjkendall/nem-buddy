@@ -57,15 +57,26 @@ def _get(url, headers=None, timeout=20):
 
 
 def fetch_aemo():
-    """-> (settlement_str, {region: {price, demand}})"""
+    """-> (settlement_str, {region: {price, demand, ni, ic}})"""
     doc = json.loads(_get(AEMO_URL, {"User-Agent": "nem-buddy-proxy/1"}))
     out, settle = {}, None
     for row in doc.get("ELEC_NEM_SUMMARY", []):
         rid = row.get("REGIONID")
         if rid not in REGIONS:
             continue
+        flows = []
+        raw = row.get("INTERCONNECTORFLOWS")
+        try:
+            for f in (json.loads(raw) if isinstance(raw, str) else (raw or [])):
+                name = f.get("name")
+                if name is not None and f.get("value") is not None:
+                    flows.append([str(name), round(float(f["value"]), 1)])
+        except (ValueError, TypeError, AttributeError):
+            flows = []
         out[rid] = {"price": float(row.get("PRICE", 0.0)),
-                    "demand": float(row.get("TOTALDEMAND", 0.0))}
+                    "demand": float(row.get("TOTALDEMAND", 0.0)),
+                    "ni": round(float(row.get("NETINTERCHANGE", 0.0)), 1),
+                    "ic": flows}
         settle = settle or row.get("SETTLEMENTDATE")
     return settle, out
 
@@ -125,6 +136,8 @@ def build_payload(settle, aemo, oe):
             "id": rid,
             "price": round(a.get("price", 0.0), 2),
             "demand": round(a.get("demand", 0.0)),
+            "ni": a.get("ni", 0.0),
+            "ic": a.get("ic", []),
             "ren": m.get("ren", 0.0),
             "fuel": m.get("fuel", {f: 0 for f in FUELS}),
         })
