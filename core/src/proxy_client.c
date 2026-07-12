@@ -1,7 +1,9 @@
 #include "nem/proxy_client.h"
 #include "nem/regions.h"
+#include "nem/timeutil.h"
 #include "cJSON.h"
 #include <string.h>
+#include <stdio.h>
 
 /* proxy fuel keys, in nem_fuel_t order (COAL,GAS,HYDRO,WIND,SOLAR,BATTERY,OTHER) */
 static const char *const FUEL_KEYS[NEM_FUEL_COUNT] = {
@@ -26,6 +28,10 @@ bool nem_proxy_parse(const char *json, nem_snapshot_t *snap, nem_region_mix_t *m
     const cJSON *regions = cJSON_GetObjectItemCaseSensitive(root, "regions");
     if (!cJSON_IsArray(regions)) { cJSON_Delete(root); return false; }
 
+    long long epoch = 0;
+    const cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "t");
+    if (cJSON_IsString(t)) nem_parse_iso8601(t->valuestring, &epoch);
+
     int parsed = 0;
     const cJSON *el = NULL;
     cJSON_ArrayForEach(el, regions) {
@@ -38,6 +44,22 @@ bool nem_proxy_parse(const char *json, nem_snapshot_t *snap, nem_region_mix_t *m
         rs->valid = true;
         rs->price = num(el, "price");
         rs->demand_mw = num(el, "demand");
+        rs->settlement_epoch = epoch;
+        rs->net_interchange = num(el, "ni");
+        rs->interconnector_count = 0;
+        const cJSON *ic = cJSON_GetObjectItemCaseSensitive(el, "ic");
+        if (cJSON_IsArray(ic)) {
+            const cJSON *pair = NULL;
+            cJSON_ArrayForEach(pair, ic) {
+                if (rs->interconnector_count >= NEM_MAX_INTERCONNECTORS) break;
+                const cJSON *nm = cJSON_GetArrayItem(pair, 0);
+                const cJSON *vl = cJSON_GetArrayItem(pair, 1);
+                if (!cJSON_IsString(nm) || !cJSON_IsNumber(vl)) continue;
+                nem_interconnector_flow_t *f = &rs->interconnectors[rs->interconnector_count++];
+                snprintf(f->name, sizeof f->name, "%s", nm->valuestring);
+                f->value = vl->valuedouble;
+            }
+        }
 
         nem_fuel_mix_t *fm = &mix->regions[reg];
         fm->valid = true;

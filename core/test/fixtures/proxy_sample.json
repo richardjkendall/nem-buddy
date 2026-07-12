@@ -1,4 +1,4 @@
 {"t":"2026-07-11T17:55:00","regions":[
-{"id":"VIC1","price":19.24,"demand":7477,"ren":0.445,"fuel":{"coal":4551,"gas":0,"hydro":40,"wind":2978,"solar":0,"battery":627,"other":0}},
-{"id":"SA1","price":-4.67,"demand":1300,"ren":0.9,"fuel":{"coal":0,"gas":100,"hydro":0,"wind":900,"solar":0,"battery":50,"other":0}}
+{"id":"VIC1","price":19.24,"demand":7477,"ni":1064.7,"ic":[["T-V-MNSP1",311.3],["VIC1-NSW1",528.8],["V-SA",224.6]],"ren":0.445,"fuel":{"coal":4551,"gas":0,"hydro":40,"wind":2978,"solar":0,"battery":627,"other":0}},
+{"id":"SA1","price":-4.67,"demand":1300,"ni":-224.6,"ic":[["V-SA",-224.6]],"ren":0.9,"fuel":{"coal":0,"gas":100,"hydro":0,"wind":900,"solar":0,"battery":50,"other":0}}
 ]}
