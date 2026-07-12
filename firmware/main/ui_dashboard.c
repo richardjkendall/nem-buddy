@@ -13,9 +13,17 @@ static const uint32_t k_fuel_hex[NEM_FUEL_COUNT] = {
 static struct {
     lv_obj_t *region, *price, *unit, *demand_val, *renew_val;
     lv_obj_t *seg[NEM_FUEL_COUNT];
+    lv_obj_t *chip[RIBBON_MAX];        /* chip container per ribbon slot */
+    lv_obj_t *chip_name[RIBBON_MAX];
     lv_obj_t *chip_price[RIBBON_MAX];
     int chip_n;
+    nem_region_t hero;
+    nem_snapshot_t snap;
+    nem_region_mix_t mix;
+    bool have_data;
 } d;
+
+static void render(void);
 
 static lv_color_t price_color(double p)
 {
@@ -36,12 +44,41 @@ static lv_obj_t *mk(lv_obj_t *p, const lv_font_t *f, lv_color_t col, lv_align_t 
 
 static int round_dollar(double p) { return (int)(p + (p < 0 ? -0.5 : 0.5)); }
 
+/* Which region does ribbon slot `ci` show? The ribbon lists every region
+ * except the hero, in enum order. */
+static nem_region_t ribbon_region(int ci)
+{
+    int seen = 0;
+    for (int r = 0; r < NEM_REGION_COUNT; r++) {
+        if (r == d.hero) continue;
+        if (seen == ci) return (nem_region_t)r;
+        seen++;
+    }
+    return d.hero;
+}
+
+static void chip_clicked_cb(lv_event_t *e)
+{
+    lv_obj_t *chip = lv_event_get_target(e);
+    for (int i = 0; i < d.chip_n; i++) {
+        if (d.chip[i] == chip) {
+            d.hero = ribbon_region(i);
+            render();
+            break;
+        }
+    }
+}
+
 void ui_dashboard_create(lv_obj_t *parent)
 {
     lv_obj_set_style_bg_color(parent, NEM_C_BG, 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(parent, 20, 0);
+
+    nem_config_t cfg; nem_config_defaults(&cfg);
+    d.hero = cfg.home_region;
+    d.have_data = false;
 
     lv_obj_t *status = mk(parent, &lv_font_montserrat_14, NEM_C_MUTED, LV_ALIGN_TOP_MID, 0, 0);
     lv_label_set_text(status, "NEM   LIVE");
@@ -107,40 +144,54 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_label_set_text(nm, "—");
         lv_obj_t *pr = mk(chip, &lv_font_montserrat_20, NEM_C_WHITE, LV_ALIGN_CENTER, 0, 0);
         lv_label_set_text(pr, "—");
-        lv_obj_set_user_data(chip, nm);
+        lv_obj_add_flag(chip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(chip, chip_clicked_cb, LV_EVENT_CLICKED, NULL);
+        d.chip[d.chip_n] = chip;
+        d.chip_name[d.chip_n] = nm;
         d.chip_price[d.chip_n] = pr;
         d.chip_n++;
     }
 }
 
-void ui_dashboard_update(const nem_snapshot_t *snap, const nem_fuel_mix_t *mix, nem_region_t home)
+void ui_dashboard_update(const nem_snapshot_t *snap, const nem_region_mix_t *mix)
 {
-    const nem_region_snapshot_t *h = &snap->regions[home];
-    lv_label_set_text(d.region, nem_region_name(home));
+    d.snap = *snap;
+    if (mix) d.mix = *mix;
+    d.have_data = true;
+    render();
+}
+
+static void render(void)
+{
+    if (!d.have_data) return;
+    const nem_region_snapshot_t *h = &d.snap.regions[d.hero];
+    const nem_fuel_mix_t *hm = &d.mix.regions[d.hero];
+
+    lv_label_set_text(d.region, nem_region_name(d.hero));
     if (h->valid) {
         lv_label_set_text_fmt(d.price, "$%d", round_dollar(h->price));
         lv_obj_set_style_text_color(d.price, price_color(h->price), 0);
         lv_label_set_text_fmt(d.demand_val, "%d MW", (int)(h->demand_mw + 0.5));
     }
-
-    if (mix && mix->valid) {
+    if (hm->valid) {
         for (int i = 0; i < NEM_FUEL_COUNT; i++)
-            lv_obj_set_flex_grow(d.seg[i], (int32_t)(mix->mw[i] + 0.5));
-        lv_label_set_text_fmt(d.renew_val, "%d%%", (int)(mix->renewable_fraction * 100 + 0.5));
+            lv_obj_set_flex_grow(d.seg[i], (int32_t)(hm->mw[i] + 0.5));
+        lv_label_set_text_fmt(d.renew_val, "%d%%", (int)(hm->renewable_fraction * 100 + 0.5));
     }
 
     int ci = 0;
     for (int r = 0; r < NEM_REGION_COUNT && ci < d.chip_n; r++) {
-        if (r == home) continue;
-        const nem_region_snapshot_t *rs = &snap->regions[r];
-        lv_obj_t *pr = d.chip_price[ci];
-        lv_obj_t *chip = lv_obj_get_parent(pr);
-        lv_obj_t *nm = (lv_obj_t *)lv_obj_get_user_data(chip);
-        lv_label_set_text(nm, nem_region_name((nem_region_t)r));
+        if (r == d.hero) continue;
+        const nem_region_snapshot_t *rs = &d.snap.regions[r];
+        lv_label_set_text(d.chip_name[ci], nem_region_name((nem_region_t)r));
         if (rs->valid) {
-            lv_label_set_text_fmt(pr, "$%d", round_dollar(rs->price));
-            lv_obj_set_style_text_color(pr, price_color(rs->price), 0);
+            lv_label_set_text_fmt(d.chip_price[ci], "$%d", round_dollar(rs->price));
+            lv_obj_set_style_text_color(d.chip_price[ci], price_color(rs->price), 0);
         }
         ci++;
     }
 }
+
+nem_region_t ui_dashboard_hero_region(void) { return d.hero; }
+const nem_snapshot_t   *ui_dashboard_snapshot(void) { return d.have_data ? &d.snap : NULL; }
+const nem_region_mix_t *ui_dashboard_mix(void)      { return d.have_data ? &d.mix  : NULL; }

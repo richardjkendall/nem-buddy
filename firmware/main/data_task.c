@@ -35,14 +35,12 @@ static void data_task(void *arg)
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
-                const nem_region_snapshot_t *h = &snap.regions[cfg.home_region];
-                const nem_fuel_mix_t *hm = &mix.regions[cfg.home_region];
                 bsp_display_lock(-1);
-                ui_dashboard_update(&snap, hm, cfg.home_region);
+                ui_dashboard_update(&snap, &mix);
                 bsp_display_unlock();
-                ESP_LOGI(TAG, "ok: %s $%.1f  demand %.0f  ren %.0f%%",
-                         nem_region_name(cfg.home_region), h->price, h->demand_mw,
-                         hm->renewable_fraction * 100.0);
+                const nem_region_snapshot_t *h = &snap.regions[cfg.home_region];
+                ESP_LOGI(TAG, "ok: %s $%.1f  demand %.0f",
+                         nem_region_name(cfg.home_region), h->price, h->demand_mw);
             } else {
                 ESP_LOGW(TAG, "proxy parse failed (%d bytes)", len);
             }
