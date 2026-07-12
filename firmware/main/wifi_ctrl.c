@@ -14,12 +14,18 @@ static EventGroupHandle_t s_events;
 #define FAIL_BIT      BIT1
 static int  s_retries, s_max_retries;
 static bool s_inited;
+static bool s_want_sta;   /* only drive STA connect/retry when a STA connect was requested */
 
 static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg; (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_want_sta) {
+            esp_wifi_connect();
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (!s_want_sta) {
+            return;
+        }
         if (s_retries < s_max_retries) {
             s_retries++; esp_wifi_connect(); ESP_LOGW(TAG, "retry %d", s_retries);
         } else {
@@ -52,6 +58,7 @@ esp_err_t wifi_ctrl_init(void) {
 }
 
 esp_err_t wifi_ctrl_sta_connect(const net_creds_t *c, int max_retries) {
+    s_want_sta = true;
     s_retries = 0;
     s_max_retries = max_retries;
     xEventGroupClearBits(s_events, CONNECTED_BIT | FAIL_BIT);
@@ -71,6 +78,7 @@ esp_err_t wifi_ctrl_sta_connect(const net_creds_t *c, int max_retries) {
 
 esp_err_t wifi_ctrl_portal_start(const char *ap_ssid, const char *ap_pass,
                                  wifi_ctrl_ap_t *scan_out, int *scan_n) {
+    s_want_sta = false;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
@@ -98,7 +106,15 @@ esp_err_t wifi_ctrl_portal_start(const char *ap_ssid, const char *ap_pass,
     ap.ap.channel        = 1;
     ap.ap.max_connection = 4;
     ap.ap.authmode       = WIFI_AUTH_WPA2_PSK;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+    if (strlen(ap_pass) < 8) {
+        ESP_LOGE(TAG, "AP password too short for WPA2 (>= 8 chars)");
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t aerr = esp_wifi_set_config(WIFI_IF_AP, &ap);
+    if (aerr != ESP_OK) {
+        ESP_LOGE(TAG, "AP set_config failed: %s", esp_err_to_name(aerr));
+        return aerr;
+    }
     ESP_LOGI(TAG, "SoftAP \"%s\" up at 192.168.4.1 (%d APs scanned)", ap_ssid, *scan_n);
     return ESP_OK;
 }
