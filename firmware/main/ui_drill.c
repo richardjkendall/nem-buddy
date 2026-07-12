@@ -19,7 +19,18 @@ static struct {
     lv_chart_series_t *hist_ser;
     nem_region_t region;
     bool open;
+    lv_obj_t *mix_rows[NEM_FUEL_COUNT];   /* "Wind   2978 MW  44%" labels */
+    lv_obj_t *mix_head;
+    lv_obj_t *ic_head;
+    lv_obj_t *ic_rows[NEM_MAX_INTERCONNECTORS];
 } s;
+
+static const char *const FUEL_NAME[NEM_FUEL_COUNT] = {
+    "Coal", "Gas", "Hydro", "Wind", "Solar", "Battery", "Other"
+};
+static const uint32_t FUEL_HEX[NEM_FUEL_COUNT] = {
+    0x5a5a5a, 0xe0a23b, 0x4a9eff, 0x37d67a, 0xffd23f, 0xb06bff, 0x8a8a92
+};
 
 static lv_color_t price_band(double p)
 {
@@ -68,12 +79,6 @@ static void render_history(void)
     lv_obj_set_style_line_color(s.hist_chart, price_band(hi), LV_PART_ITEMS);
 }
 
-/* forward decls for the mix/interconnector tiles (Task 6) */
-static void build_mix_tile(lv_obj_t *t);
-static void build_ic_tile(lv_obj_t *t);
-static void render_mix(void);
-static void render_ic(void);
-
 static lv_obj_t *tile_header(lv_obj_t *t, const char *title)
 {
     lv_obj_t *lbl = lv_label_create(t);
@@ -96,6 +101,90 @@ static void build_history_tile(lv_obj_t *t)
     lv_obj_set_style_size(c, 0, 0, LV_PART_INDICATOR);   /* hide point markers */
     s.hist_ser = lv_chart_add_series(c, NEM_C_BLUE, LV_CHART_AXIS_PRIMARY_Y);
     s.hist_chart = c;
+}
+
+static void build_mix_tile(lv_obj_t *t)
+{
+    tile_header(t, "GENERATION MIX");
+    s.mix_head = lv_label_create(t);
+    lv_obj_set_style_text_color(s.mix_head, NEM_C_GREEN, 0);
+    lv_obj_set_style_text_font(s.mix_head, &lv_font_montserrat_22, 0);
+    lv_obj_align(s.mix_head, LV_ALIGN_TOP_MID, 0, 30);
+    lv_label_set_text(s.mix_head, "--");
+    for (int i = 0; i < NEM_FUEL_COUNT; i++) {
+        lv_obj_t *l = lv_label_create(t);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(FUEL_HEX[i]), 0);
+        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 20, 70 + i * 30);
+        lv_label_set_text(l, "");
+        s.mix_rows[i] = l;
+    }
+}
+
+static void render_mix(void)
+{
+    const nem_region_mix_t *m = ui_dashboard_mix();
+    if (!m) return;
+    const nem_fuel_mix_t *fm = &m->regions[s.region];
+    if (!fm->valid || fm->total_mw <= 0) {
+        lv_label_set_text(s.mix_head, "--");
+        for (int i = 0; i < NEM_FUEL_COUNT; i++) lv_label_set_text(s.mix_rows[i], "");
+        return;
+    }
+    lv_label_set_text_fmt(s.mix_head, "%d%% renewable   %d MW",
+                          (int)(fm->renewable_fraction * 100 + 0.5), (int)(fm->total_mw + 0.5));
+    /* rank by MW: simple selection over the fixed small array */
+    int order[NEM_FUEL_COUNT];
+    for (int i = 0; i < NEM_FUEL_COUNT; i++) order[i] = i;
+    for (int i = 0; i < NEM_FUEL_COUNT; i++)
+        for (int j = i + 1; j < NEM_FUEL_COUNT; j++)
+            if (fm->mw[order[j]] > fm->mw[order[i]]) { int tmp = order[i]; order[i] = order[j]; order[j] = tmp; }
+    for (int rank = 0; rank < NEM_FUEL_COUNT; rank++) {
+        int f = order[rank];
+        lv_obj_set_style_text_color(s.mix_rows[rank], lv_color_hex(FUEL_HEX[f]), 0);
+        int pct = (int)(100.0 * fm->mw[f] / fm->total_mw + 0.5);
+        lv_label_set_text_fmt(s.mix_rows[rank], "%-8s %5d MW  %2d%%", FUEL_NAME[f], (int)(fm->mw[f] + 0.5), pct);
+    }
+}
+
+static void build_ic_tile(lv_obj_t *t)
+{
+    tile_header(t, "INTERCONNECTORS");
+    s.ic_head = lv_label_create(t);
+    lv_obj_set_style_text_color(s.ic_head, NEM_C_WHITE, 0);
+    lv_obj_set_style_text_font(s.ic_head, &lv_font_montserrat_22, 0);
+    lv_obj_align(s.ic_head, LV_ALIGN_TOP_MID, 0, 30);
+    lv_label_set_text(s.ic_head, "--");
+    for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) {
+        lv_obj_t *l = lv_label_create(t);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(l, NEM_C_WHITE, 0);
+        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 20, 70 + i * 30);
+        lv_label_set_text(l, "");
+        s.ic_rows[i] = l;
+    }
+}
+
+static void render_ic(void)
+{
+    const nem_snapshot_t *snap = ui_dashboard_snapshot();
+    if (!snap) return;
+    const nem_region_snapshot_t *rs = &snap->regions[s.region];
+    double ni = rs->net_interchange;
+    lv_label_set_text_fmt(s.ic_head, "Net: %s %d MW",
+                          ni >= 0 ? "exporting" : "importing", (int)(ni < 0 ? -ni : ni) );
+    lv_obj_set_style_text_color(s.ic_head, ni >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
+    for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) {
+        if (i < rs->interconnector_count) {
+            const nem_interconnector_flow_t *f = &rs->interconnectors[i];
+            const char *arrow = f->value >= 0 ? "->" : "<-";
+            lv_label_set_text_fmt(s.ic_rows[i], "%-10s %s %d MW",
+                                  f->name, arrow, (int)(f->value < 0 ? -f->value : f->value));
+            lv_obj_set_style_text_color(s.ic_rows[i], f->value >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
+        } else {
+            lv_label_set_text(s.ic_rows[i], "");
+        }
+    }
 }
 
 static void close_drill(void)
@@ -182,8 +271,3 @@ void ui_drill_refresh(void)
 }
 
 bool ui_drill_is_open(void) { return s.open; }
-
-static void build_mix_tile(lv_obj_t *t) { tile_header(t, "GENERATION MIX"); }
-static void build_ic_tile(lv_obj_t *t)  { tile_header(t, "INTERCONNECTORS"); }
-static void render_mix(void) {}
-static void render_ic(void)  {}
