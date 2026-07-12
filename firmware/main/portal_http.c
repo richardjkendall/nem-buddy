@@ -74,16 +74,23 @@ static esp_err_t send_form(httpd_req_t *req, const char *err) {
     httpd_resp_sendstr_chunk(req,
         "<option value=__other__>Other / hidden\xE2\x80\xA6</option></select>"
         "<input id=oth placeholder='hidden SSID' style='display:none'>"
-        "<label>Password</label><input name=password type=password>"
-        "<label>Proxy URL</label><input name=proxy_url value='");
+        "<label>Password</label><input name=password type=password>");
+    /* Emit each prefilled field with its value embedded in one buffer. Sending
+     * an (escaped) value as its own chunk would send a zero-length chunk when
+     * the value is empty, which in HTTP chunked encoding ends the response and
+     * truncates the form. */
     char ebuf[800];
+    char field[900];
     html_escape(cur.proxy_url, ebuf, sizeof ebuf);
-    httpd_resp_sendstr_chunk(req, ebuf);
-    httpd_resp_sendstr_chunk(req,
-        "'><label>Proxy token (optional)</label><input name=proxy_token value='");
+    snprintf(field, sizeof field,
+             "<label>Proxy URL</label><input name=proxy_url value='%s'>", ebuf);
+    httpd_resp_sendstr_chunk(req, field);
     html_escape(cur.proxy_token, ebuf, sizeof ebuf);
-    httpd_resp_sendstr_chunk(req, ebuf);
-    httpd_resp_sendstr_chunk(req, "'><button>Save &amp; connect</button></form>");
+    snprintf(field, sizeof field,
+             "<label>Proxy token (optional)</label>"
+             "<input name=proxy_token value='%s'>", ebuf);
+    httpd_resp_sendstr_chunk(req, field);
+    httpd_resp_sendstr_chunk(req, "<button>Save &amp; connect</button></form>");
     httpd_resp_sendstr_chunk(req, NULL);   /* end chunks */
     return ESP_OK;
 }
@@ -115,7 +122,7 @@ static esp_err_t save_post(httpd_req_t *req) {
         "<h2>Saved \xE2\x80\x94 connecting\xE2\x80\xA6</h2>"
         "<p>NEM Buddy will restart and join your network.</p>");
     bsp_display_lock(-1);
-    ui_setup_status("Saved \xE2\x80\x94 connecting\xE2\x80\xA6");
+    ui_setup_status("Saved - connecting...");
     bsp_display_unlock();
     ESP_LOGI(TAG, "creds saved; rebooting");
     vTaskDelay(pdMS_TO_TICKS(1200));   /* let the response flush */
