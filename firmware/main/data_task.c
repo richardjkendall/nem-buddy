@@ -9,9 +9,13 @@
 #include "bsp/esp-bsp.h"
 #include "nem/proxy_client.h"
 #include "nem/config.h"
+#include "nem/history.h"
+#include "ui_drill.h"
 
 static const char *TAG = "data";
-#define PROXY_BUF_SZ (8 * 1024)
+#define PROXY_BUF_SZ (24 * 1024)   /* holds the intraday history curves too */
+
+static nem_history_t *s_hist;
 
 static void data_task(void *arg)
 {
@@ -29,20 +33,24 @@ static void data_task(void *arg)
     char *buf = heap_caps_malloc(PROXY_BUF_SZ, MALLOC_CAP_SPIRAM);
     if (!buf) { ESP_LOGE(TAG, "no PSRAM buffer"); vTaskDelete(NULL); return; }
 
+    s_hist = heap_caps_malloc(sizeof(nem_history_t), MALLOC_CAP_SPIRAM);
+    if (!s_hist) { ESP_LOGE(TAG, "no PSRAM history"); vTaskDelete(NULL); return; }
+    nem_history_init(s_hist);
+
     for (;;) {
         int len = 0;
         if (nem_http_get(creds.proxy_url, bearer, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
-                const nem_region_snapshot_t *h = &snap.regions[cfg.home_region];
-                const nem_fuel_mix_t *hm = &mix.regions[cfg.home_region];
                 bsp_display_lock(-1);
-                ui_dashboard_update(&snap, hm, cfg.home_region);
+                nem_proxy_parse_history(buf, s_hist);   /* today's curve from the proxy */
+                ui_dashboard_update(&snap, &mix);
+                ui_drill_refresh();
                 bsp_display_unlock();
-                ESP_LOGI(TAG, "ok: %s $%.1f  demand %.0f  ren %.0f%%",
-                         nem_region_name(cfg.home_region), h->price, h->demand_mw,
-                         hm->renewable_fraction * 100.0);
+                const nem_region_snapshot_t *h = &snap.regions[cfg.home_region];
+                ESP_LOGI(TAG, "ok: %s $%.1f  demand %.0f",
+                         nem_region_name(cfg.home_region), h->price, h->demand_mw);
             } else {
                 ESP_LOGW(TAG, "proxy parse failed (%d bytes)", len);
             }
@@ -54,4 +62,10 @@ static void data_task(void *arg)
 void data_task_start(void)
 {
     xTaskCreatePinnedToCore(data_task, "data", 8192, NULL, 5, NULL, tskNO_AFFINITY);
+}
+
+const nem_region_history_t *nem_history_of(nem_region_t region)
+{
+    if (!s_hist || region >= NEM_REGION_COUNT) return NULL;
+    return &s_hist->regions[region];
 }
