@@ -565,6 +565,20 @@ static bool ic_resolve(nem_region_t hero, const char *name, double value,
     return false;
 }
 
+double ui_drill_net_export(const nem_snapshot_t *snap, nem_region_t region)
+{
+    if (!snap) return 0;
+    const nem_region_snapshot_t *rs = &snap->regions[region];
+    if (!rs->valid) return 0;
+    double net = 0;
+    for (int i = 0; i < rs->interconnector_count; i++) {
+        nem_region_t nb; double se;
+        if (ic_resolve(region, rs->interconnectors[i].name, rs->interconnectors[i].value, &nb, &se))
+            net += se;
+    }
+    return net;
+}
+
 static void build_ic_tile(lv_obj_t *t)
 {
     char ctx[24]; snprintf(ctx, sizeof ctx, "%s  now", nem_region_name(s.region));

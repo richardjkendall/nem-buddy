@@ -17,6 +17,8 @@ static const char *const k_fuel_name[NEM_FUEL_COUNT] = {
 static struct {
     lv_obj_t *region, *price, *unit, *demand_val, *renew_val;
     lv_obj_t *seg[NEM_FUEL_COUNT];
+    lv_obj_t *tf_sw[3], *tf_lbl[3];    /* top-fuels: swatch + "Name NN%" */
+    lv_obj_t *netflow;                 /* net interconnector flow summary */
     lv_obj_t *chip[RIBBON_MAX];        /* chip container per ribbon slot */
     lv_obj_t *chip_name[RIBBON_MAX];
     lv_obj_t *chip_price[RIBBON_MAX];
@@ -162,6 +164,41 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_label_set_text(nm, k_fuel_name[i]);
     }
 
+    /* Top fuels: the biggest 3 with their share (filled live in render) */
+    lv_obj_t *tf = lv_obj_create(parent);
+    lv_obj_remove_style_all(tf);
+    lv_obj_set_size(tf, 440, 30);
+    lv_obj_align(tf, LV_ALIGN_TOP_MID, 0, 250);
+    lv_obj_set_flex_flow(tf, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(tf, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(tf, LV_OBJ_FLAG_SCROLLABLE);
+    for (int k = 0; k < 3; k++) {
+        lv_obj_t *item = lv_obj_create(tf);
+        lv_obj_remove_style_all(item);
+        lv_obj_set_size(item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(item, 6, 0);
+        lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *sw = lv_obj_create(item);
+        lv_obj_remove_style_all(sw);
+        lv_obj_set_size(sw, 12, 12);
+        lv_obj_set_style_radius(sw, 3, 0);
+        lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, 0);
+        d.tf_sw[k] = sw;
+
+        lv_obj_t *lb = lv_label_create(item);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(lb, NEM_C_WHITE, 0);
+        lv_label_set_text(lb, "");
+        d.tf_lbl[k] = lb;
+    }
+
+    /* Net interconnector flow (same figure as the interconnector drill tile) */
+    d.netflow = mk(parent, &lv_font_montserrat_18, NEM_C_MUTED, LV_ALIGN_TOP_MID, 0, 300);
+    lv_label_set_text(d.netflow, "");
+
     lv_obj_t *hero_hit = lv_obj_create(parent);
     lv_obj_remove_style_all(hero_hit);
     lv_obj_set_size(hero_hit, 440, 190);
@@ -229,7 +266,33 @@ static void render(void)
         for (int i = 0; i < NEM_FUEL_COUNT; i++)
             lv_obj_set_width(d.seg[i], LV_PCT((int)(hm->mw[i] * 100.0 / tot + 0.5)));
         lv_label_set_text_fmt(d.renew_val, "%d%%", (int)(hm->renewable_fraction * 100 + 0.5));
+
+        /* top-fuels: biggest 3 (skip any that round to <1%) */
+        int ord[NEM_FUEL_COUNT];
+        for (int i = 0; i < NEM_FUEL_COUNT; i++) ord[i] = i;
+        for (int a = 0; a < NEM_FUEL_COUNT; a++)
+            for (int b = a + 1; b < NEM_FUEL_COUNT; b++)
+                if (hm->mw[ord[b]] > hm->mw[ord[a]]) { int t = ord[a]; ord[a] = ord[b]; ord[b] = t; }
+        for (int k = 0; k < 3; k++) {
+            int f = ord[k];
+            int pct = (int)(hm->mw[f] * 100.0 / tot + 0.5);
+            if (pct >= 1) {
+                lv_obj_clear_flag(d.tf_sw[k], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_bg_color(d.tf_sw[k], lv_color_hex(k_fuel_hex[f]), 0);
+                lv_label_set_text_fmt(d.tf_lbl[k], "%s %d%%", k_fuel_name[f], pct);
+            } else {
+                lv_obj_add_flag(d.tf_sw[k], LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(d.tf_lbl[k], "");
+            }
+        }
     }
+
+    /* net interconnector flow (reconciles with the interconnector drill tile) */
+    double net = ui_drill_net_export(&d.snap, d.hero);
+    lv_label_set_text_fmt(d.netflow, "%s Net %s %d MW",
+        net >= 0 ? LV_SYMBOL_UP : LV_SYMBOL_DOWN,
+        net >= 0 ? "exporting" : "importing", (int)(net < 0 ? -net + 0.5 : net + 0.5));
+    lv_obj_set_style_text_color(d.netflow, net >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
 
     int ci = 0;
     for (int r = 0; r < NEM_REGION_COUNT && ci < d.chip_n; r++) {
