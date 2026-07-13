@@ -223,8 +223,11 @@ static void render(void)
         lv_label_set_text_fmt(d.demand_val, "%d MW", (int)(h->demand_mw + 0.5));
     }
     if (hm->valid) {
+        double tot = 0;
+        for (int i = 0; i < NEM_FUEL_COUNT; i++) tot += hm->mw[i];
+        if (tot < 1) tot = 1;
         for (int i = 0; i < NEM_FUEL_COUNT; i++)
-            lv_obj_set_flex_grow(d.seg[i], (int32_t)(hm->mw[i] + 0.5));
+            lv_obj_set_width(d.seg[i], LV_PCT((int)(hm->mw[i] * 100.0 / tot + 0.5)));
         lv_label_set_text_fmt(d.renew_val, "%d%%", (int)(hm->renewable_fraction * 100 + 0.5));
     }
 

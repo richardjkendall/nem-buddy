@@ -20,7 +20,9 @@
 
 /* Plot geometry shared by the history charts (tile-relative, tile pad = 0). */
 #define PX 20              /* left margin */
-#define PW 400             /* plot width  */
+#define PW 400             /* plot width (mix/interconnector tiles) */
+#define PHW 372            /* history plot width — narrower: this panel clips
+                            * ~20px more on the right than the left */
 #define PC_Y 64            /* price chart top (gap below the header) */
 #define PC_H 186           /* price chart height */
 #define DM_Y 282           /* demand chart top */
@@ -43,6 +45,7 @@ static struct {
     void *price_cbuf;                /* its PSRAM pixel buffer (freed on close) */
     lv_obj_t *dem_plot;              /* lv_canvas: demand strip w/ gradient fill */
     void *dem_cbuf;
+    lv_obj_t *dem_hi, *dem_lo;       /* demand range labels (max top / min bottom) */
     float pv[NEM_HISTORY_SLOTS];     /* filled price values, in order */
     int pn; double plo, phi;         /* point count + display range (incl. $0) */
     lv_obj_t *peak_dot, *peak_lbl, *min_dot, *min_lbl;
@@ -235,9 +238,9 @@ static void place_marker(lv_obj_t *dot, lv_obj_t *lbl, int px, int py)
     lv_obj_clear_flag(dot, LV_OBJ_FLAG_HIDDEN);
     lv_obj_update_layout(lbl);
     int lw = lv_obj_get_width(lbl), lh = lv_obj_get_height(lbl);
-    int lx = (px < PX + PW / 2) ? (px + 9) : (px - 9 - lw);
+    int lx = (px < PX + PHW / 2) ? (px + 9) : (px - 9 - lw);
     if (lx < PX) lx = PX;
-    if (lx > PX + PW - lw) lx = PX + PW - lw;
+    if (lx > PX + PHW - lw) lx = PX + PHW - lw;
     int ly = py - lh / 2;
     if (ly < PC_Y) ly = PC_Y;
     if (ly > PC_Y + PC_H - lh) ly = PC_Y + PC_H - lh;
@@ -261,9 +264,9 @@ static void build_history_tile(lv_obj_t *t)
     lv_obj_remove_flag(pp, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(pp, LV_OBJ_FLAG_EVENT_BUBBLE);
     s.price_cbuf = heap_caps_malloc(
-        LV_CANVAS_BUF_SIZE(PW, PC_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
+        LV_CANVAS_BUF_SIZE(PHW, PC_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
     if (s.price_cbuf) {
-        lv_canvas_set_buffer(pp, s.price_cbuf, PW, PC_H, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(pp, s.price_cbuf, PHW, PC_H, LV_COLOR_FORMAT_RGB565);
         lv_canvas_fill_bg(pp, NEM_C_BG, LV_OPA_COVER);
     }
     s.price_plot = pp;
@@ -303,12 +306,24 @@ static void build_history_tile(lv_obj_t *t)
     lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(d, LV_OBJ_FLAG_EVENT_BUBBLE);
     s.dem_cbuf = heap_caps_malloc(
-        LV_CANVAS_BUF_SIZE(PW, DM_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
+        LV_CANVAS_BUF_SIZE(PHW, DM_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
     if (s.dem_cbuf) {
-        lv_canvas_set_buffer(d, s.dem_cbuf, PW, DM_H, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(d, s.dem_cbuf, PHW, DM_H, LV_COLOR_FORMAT_RGB565);
         lv_canvas_fill_bg(d, NEM_C_BG, LV_OPA_COVER);
     }
     s.dem_plot = d;
+
+    /* demand range labels (max at top-right, min at bottom-right of the strip) */
+    s.dem_hi = mk_label(t, &lv_font_montserrat_12, NEM_C_MUTED);
+    lv_obj_set_width(s.dem_hi, 60);
+    lv_obj_set_style_text_align(s.dem_hi, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s.dem_hi, PX + PHW - 60, DM_Y + 1);
+    lv_label_set_text(s.dem_hi, "");
+    s.dem_lo = mk_label(t, &lv_font_montserrat_12, NEM_C_MUTED);
+    lv_obj_set_width(s.dem_lo, 60);
+    lv_obj_set_style_text_align(s.dem_lo, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s.dem_lo, PX + PHW - 60, DM_Y + DM_H - 15);
+    lv_label_set_text(s.dem_lo, "");
 }
 
 /* Downsample n raw (price,demand) samples into <=RENDER_MAX buckets. Per bucket
@@ -356,6 +371,8 @@ static void render_history(void)
         s.pn = 0;
         if (s.price_cbuf) lv_canvas_fill_bg(s.price_plot, NEM_C_BG, LV_OPA_COVER);
         if (s.dem_cbuf)   lv_canvas_fill_bg(s.dem_plot,   NEM_C_BG, LV_OPA_COVER);
+        lv_label_set_text(s.dem_hi, "");
+        lv_label_set_text(s.dem_lo, "");
         lv_obj_add_flag(s.peak_dot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.min_dot,  LV_OBJ_FLAG_HIDDEN);
@@ -389,25 +406,32 @@ static void render_history(void)
         lv_canvas_fill_bg(s.price_plot, NEM_C_BG, LV_OPA_COVER);
         lv_layer_t layer;
         lv_canvas_init_layer(s.price_plot, &layer);
-        paint_price(&layer, 0, 0, PW, PC_H);
+        paint_price(&layer, 0, 0, PHW, PC_H);
         lv_canvas_finish_layer(s.price_plot, &layer);
     }
     if (s.dem_cbuf) {
         lv_canvas_fill_bg(s.dem_plot, NEM_C_BG, LV_OPA_COVER);
         lv_layer_t layer;
         lv_canvas_init_layer(s.dem_plot, &layer);
-        paint_demand(&layer, 0, 0, PW, DM_H, demd, s.pn, dlo, dhi);
+        paint_demand(&layer, 0, 0, PHW, DM_H, demd, s.pn, dlo, dhi);
         lv_canvas_finish_layer(s.dem_plot, &layer);
     }
 
+    /* demand range labels (max / min give the strip its vertical context) */
+    char rb[16];
+    if (dhi >= 1000) snprintf(rb, sizeof rb, "%.1fk", dhi / 1000.0); else snprintf(rb, sizeof rb, "%d", (int)(dhi + 0.5));
+    lv_label_set_text(s.dem_hi, rb);
+    if (dlo >= 1000) snprintf(rb, sizeof rb, "%.1fk", dlo / 1000.0); else snprintf(rb, sizeof rb, "%d", (int)(dlo + 0.5));
+    lv_label_set_text(s.dem_lo, rb);
+
     /* peak (red) + min (green) markers, labels placed to the side of the dot */
     if (s.pn >= 2) {
-        int ppx = PX + (int)((long)PW * peak_idx / (s.pn - 1));
+        int ppx = PX + (int)((long)PHW * peak_idx / (s.pn - 1));
         int ppy = PC_Y + (int)(PC_H * (1.0 - (peak_val - plo) / (phi - plo)));
         lv_label_set_text_fmt(s.peak_lbl, "$%d peak", (int)(peak_val + 0.5));
         place_marker(s.peak_dot, s.peak_lbl, ppx, ppy);
 
-        int mpx = PX + (int)((long)PW * min_idx / (s.pn - 1));
+        int mpx = PX + (int)((long)PHW * min_idx / (s.pn - 1));
         int mpy = PC_Y + (int)(PC_H * (1.0 - (min_val - plo) / (phi - plo)));
         lv_label_set_text_fmt(s.min_lbl, "$%d min", (int)(min_val + (min_val < 0 ? -0.5 : 0.5)));
         place_marker(s.min_dot, s.min_lbl, mpx, mpy);
