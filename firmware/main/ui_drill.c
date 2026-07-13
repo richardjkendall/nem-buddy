@@ -9,6 +9,7 @@
 #include "lvgl.h"
 #include "esp_heap_caps.h"
 #include <stdio.h>
+#include <string.h>
 
 #define N_TILES 3
 
@@ -24,6 +25,13 @@
 #define PC_H 186           /* price chart height */
 #define DM_Y 282           /* demand chart top */
 #define DM_H 64            /* demand chart height */
+
+/* Interconnector tile: diverging bars from a centre line (left=import, right=export) */
+#define ICX       220      /* centre line (tile-relative) */
+#define IC_BARMAX 120      /* max bar length per side */
+#define IC_TOP    140      /* rows/axis top */
+#define IC_ROW0   157      /* first bar-row centre y */
+#define IC_ROWH   46
 
 static struct {
     lv_obj_t *root, *tv, *tile[N_TILES], *dot[N_TILES];
@@ -42,7 +50,8 @@ static struct {
     lv_obj_t *mix_sub_mw, *mix_sub_ren;
     lv_obj_t *mix_name[NEM_FUEL_COUNT], *mix_fill[NEM_FUEL_COUNT], *mix_pct[NEM_FUEL_COUNT];
     /* interconnector tile */
-    lv_obj_t *ic_head;
+    lv_obj_t *ic_head, *ic_axis;
+    lv_obj_t *ic_bar[NEM_MAX_INTERCONNECTORS];
     lv_obj_t *ic_name[NEM_MAX_INTERCONNECTORS], *ic_val[NEM_MAX_INTERCONNECTORS];
 } s;
 
@@ -506,6 +515,32 @@ static void render_mix(void)
 
 /* ===================== Tile 3: interconnectors ===================== */
 
+/* Canonical interconnector endpoints. AEMO reports each flow positive in the
+ * from->to direction, so the raw sign is NOT relative to the hero region — we
+ * resolve it per-region below. */
+static const struct { const char *name; nem_region_t from, to; } IC_MAP[] = {
+    { "VIC1-NSW1", NEM_REGION_VIC, NEM_REGION_NSW },  /* VIC -> NSW */
+    { "NSW1-QLD1", NEM_REGION_NSW, NEM_REGION_QLD },  /* QNI */
+    { "N-Q-MNSP1", NEM_REGION_NSW, NEM_REGION_QLD },  /* Terranora */
+    { "T-V-MNSP1", NEM_REGION_TAS, NEM_REGION_VIC },  /* Basslink */
+    { "V-SA",      NEM_REGION_VIC, NEM_REGION_SA  },  /* Heywood */
+    { "V-S-MNSP1", NEM_REGION_VIC, NEM_REGION_SA  },  /* Murraylink */
+};
+
+/* From `hero`'s perspective, resolve one flow to its neighbour region and the
+ * hero's signed export (>0 export, <0 import). false if name unknown / not ours. */
+static bool ic_resolve(nem_region_t hero, const char *name, double value,
+                       nem_region_t *neighbour, double *signed_export)
+{
+    for (size_t k = 0; k < sizeof IC_MAP / sizeof IC_MAP[0]; k++) {
+        if (strcmp(name, IC_MAP[k].name) != 0) continue;
+        if (IC_MAP[k].from == hero) { *neighbour = IC_MAP[k].to;   *signed_export =  value; return true; }
+        if (IC_MAP[k].to   == hero) { *neighbour = IC_MAP[k].from; *signed_export = -value; return true; }
+        return false;
+    }
+    return false;
+}
+
 static void build_ic_tile(lv_obj_t *t)
 {
     char ctx[24]; snprintf(ctx, sizeof ctx, "%s  now", nem_region_name(s.region));
@@ -515,25 +550,51 @@ static void build_ic_tile(lv_obj_t *t)
     lv_label_set_text(title, "Interconnectors");
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, PX, 26);
 
-    s.ic_head = mk_label(t, &lv_font_montserrat_18, NEM_C_MUTED);
+    lv_obj_t *nf = mk_label(t, &lv_font_montserrat_12, NEM_C_MUTED);
+    lv_label_set_text(nf, "NET FLOW");
+    lv_obj_align(nf, LV_ALIGN_TOP_LEFT, PX, 60);
+
+    s.ic_head = mk_label(t, &lv_font_montserrat_22, NEM_C_MUTED);
     lv_label_set_text(s.ic_head, "--");
-    lv_obj_align(s.ic_head, LV_ALIGN_TOP_LEFT, PX, 58);
+    lv_obj_align(s.ic_head, LV_ALIGN_TOP_LEFT, PX, 76);
+
+    /* side guides + hero centre label */
+    lv_obj_t *gi = mk_label(t, &lv_font_montserrat_12, NEM_C_BLUE);
+    lv_label_set_text(gi, LV_SYMBOL_LEFT " IMPORT");
+    lv_obj_align(gi, LV_ALIGN_TOP_LEFT, PX, 118);
+    lv_obj_t *ge = mk_label(t, &lv_font_montserrat_12, NEM_C_AMBER);
+    lv_label_set_text(ge, "EXPORT " LV_SYMBOL_RIGHT);
+    lv_obj_align(ge, LV_ALIGN_TOP_RIGHT, -PX, 118);
+    lv_obj_t *hero = mk_label(t, &lv_font_montserrat_12, NEM_C_MUTED);
+    lv_label_set_text(hero, nem_region_name(s.region));
+    lv_obj_set_style_text_align(hero, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(hero, 40);
+    lv_obj_set_pos(hero, ICX - 20, 120);
+
+    /* faint centre axis (sized in render to the number of rows) */
+    s.ic_axis = lv_obj_create(t);
+    lv_obj_remove_style_all(s.ic_axis);
+    lv_obj_set_style_bg_color(s.ic_axis, lv_color_hex(0x2a2a30), 0);
+    lv_obj_set_style_bg_opa(s.ic_axis, LV_OPA_COVER, 0);
+    lv_obj_set_size(s.ic_axis, 1, 0);
+    lv_obj_set_pos(s.ic_axis, ICX, IC_TOP);
 
     for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) {
-        lv_obj_t *row = lv_obj_create(t);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, PW, 26);
-        lv_obj_set_pos(row, PX, 96 + i * 34);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *bar = lv_obj_create(t);
+        lv_obj_remove_style_all(bar);
+        lv_obj_set_size(bar, 0, 18);
+        lv_obj_set_style_radius(bar, 4, 0);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        s.ic_bar[i] = bar;
 
-        lv_obj_t *nm = mk_label(row, &lv_font_montserrat_18, lv_color_hex(0xc9c9d2));
+        lv_obj_t *nm = mk_label(t, &lv_font_montserrat_14, lv_color_hex(0xc9c9d2));
+        lv_obj_set_width(nm, 84);
         lv_label_set_text(nm, "");
         s.ic_name[i] = nm;
 
-        lv_obj_t *vl = mk_label(row, &lv_font_montserrat_18, NEM_C_WHITE);
-        lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_t *vl = mk_label(t, &lv_font_montserrat_14, NEM_C_WHITE);
+        lv_obj_set_width(vl, 54);
         lv_label_set_text(vl, "");
         s.ic_val[i] = vl;
     }
@@ -544,30 +605,77 @@ static void render_ic(void)
     const nem_snapshot_t *snap = ui_dashboard_snapshot();
     if (!snap) return;
     const nem_region_snapshot_t *rs = &snap->regions[s.region];
-    if (!rs->valid) {
+
+    /* aggregate per neighbour (sum links, hero-signed) so numbers reconcile */
+    double per_nb[NEM_REGION_COUNT] = {0};
+    bool have_nb[NEM_REGION_COUNT] = {false};
+    if (rs->valid) {
+        for (int i = 0; i < rs->interconnector_count; i++) {
+            nem_region_t nb; double se;
+            if (ic_resolve(s.region, rs->interconnectors[i].name, rs->interconnectors[i].value, &nb, &se)) {
+                per_nb[nb] += se; have_nb[nb] = true;
+            }
+        }
+    }
+    struct { nem_region_t nb; double mw; bool exp; } row[NEM_REGION_COUNT];
+    int nrows = 0; double net = 0;
+    for (int r = 0; r < NEM_REGION_COUNT; r++) {
+        if (!have_nb[r]) continue;
+        net += per_nb[r];
+        row[nrows].nb = r; row[nrows].mw = per_nb[r] < 0 ? -per_nb[r] : per_nb[r];
+        row[nrows].exp = per_nb[r] >= 0; nrows++;
+    }
+    /* sort by magnitude, biggest first */
+    for (int a = 0; a < nrows; a++)
+        for (int b = a + 1; b < nrows; b++)
+            if (row[b].mw > row[a].mw) { __typeof__(row[0]) tmp = row[a]; row[a] = row[b]; row[b] = tmp; }
+
+    /* net headline */
+    if (!rs->valid || nrows == 0) {
         lv_label_set_text(s.ic_head, "--");
         lv_obj_set_style_text_color(s.ic_head, NEM_C_MUTED, 0);
-        for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) {
-            lv_label_set_text(s.ic_name[i], "");
-            lv_label_set_text(s.ic_val[i], "");
-        }
-        return;
+    } else {
+        lv_label_set_text_fmt(s.ic_head, "%s %s %d MW",
+            net >= 0 ? LV_SYMBOL_UP : LV_SYMBOL_DOWN,
+            net >= 0 ? "Exporting" : "Importing", (int)(net < 0 ? -net + 0.5 : net + 0.5));
+        lv_obj_set_style_text_color(s.ic_head, net >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
     }
-    double ni = rs->net_interchange;
-    lv_label_set_text_fmt(s.ic_head, "Net %s %d MW",
-                          ni >= 0 ? "exporting" : "importing", (int)(ni < 0 ? -ni : ni));
-    lv_obj_set_style_text_color(s.ic_head, ni >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
+    lv_obj_set_size(s.ic_axis, 1, nrows > 0 ? nrows * IC_ROWH : 0);
 
+    double maxmw = nrows > 0 ? row[0].mw : 1;
+    if (maxmw <= 0) maxmw = 1;
     for (int i = 0; i < NEM_MAX_INTERCONNECTORS; i++) {
-        if (i < rs->interconnector_count) {
-            const nem_interconnector_flow_t *f = &rs->interconnectors[i];
-            lv_label_set_text(s.ic_name[i], f->name);
-            const char *arrow = f->value >= 0 ? LV_SYMBOL_UP : LV_SYMBOL_DOWN;  /* export/import */
-            lv_label_set_text_fmt(s.ic_val[i], "%s %d MW", arrow, (int)(f->value < 0 ? -f->value : f->value));
-            lv_obj_set_style_text_color(s.ic_val[i], f->value >= 0 ? NEM_C_AMBER : NEM_C_BLUE, 0);
-        } else {
+        if (i >= nrows) {
+            lv_obj_add_flag(s.ic_bar[i], LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s.ic_name[i], "");
             lv_label_set_text(s.ic_val[i], "");
+            continue;
+        }
+        int cy = IC_ROW0 + i * IC_ROWH;
+        int len = (int)(row[i].mw * IC_BARMAX / maxmw + 0.5); if (len < 8) len = 8;
+        lv_color_t c = row[i].exp ? NEM_C_AMBER : NEM_C_BLUE;
+
+        lv_obj_clear_flag(s.ic_bar[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(s.ic_bar[i], len, 18);
+        lv_obj_set_pos(s.ic_bar[i], row[i].exp ? ICX : ICX - len, cy - 9);
+        lv_obj_set_style_bg_color(s.ic_bar[i], c, 0);
+
+        /* neighbour name in the fixed edge column */
+        lv_label_set_text(s.ic_name[i], nem_region_name(row[i].nb));
+        lv_obj_set_style_text_align(s.ic_name[i], row[i].exp ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_set_pos(s.ic_name[i], row[i].exp ? (PX + PW - 28 - 84) : PX, cy - 8);
+
+        /* value at the bar tip: inside the bar if long enough, else just outside */
+        char vb[16]; snprintf(vb, sizeof vb, "%d", (int)(row[i].mw + 0.5));
+        lv_label_set_text(s.ic_val[i], vb);
+        bool inside = len >= 62;
+        lv_obj_set_style_text_color(s.ic_val[i], inside ? lv_color_hex(0x0d0d0f) : c, 0);
+        if (row[i].exp) {
+            lv_obj_set_style_text_align(s.ic_val[i], inside ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
+            lv_obj_set_pos(s.ic_val[i], inside ? (ICX + len - 6 - 54) : (ICX + len + 5), cy - 8);
+        } else {
+            lv_obj_set_style_text_align(s.ic_val[i], inside ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT, 0);
+            lv_obj_set_pos(s.ic_val[i], inside ? (ICX - len + 6) : (ICX - len - 5 - 54), cy - 8);
         }
     }
 }
