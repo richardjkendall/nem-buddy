@@ -7,27 +7,37 @@
 #include "nem/history.h"
 #include "nem/regions.h"
 #include "lvgl.h"
+#include "esp_heap_caps.h"
 #include <stdio.h>
 
 #define N_TILES 3
 
+/* Cap rendered points: the price/demand plots are ~400px wide, so drawing all
+ * ~288 daily 5-min slots is wasted work that stalls the swipe animation (the
+ * chart redraws every frame while a tile slides). Bucket down to this many. */
+#define RENDER_MAX 80
+
 /* Plot geometry shared by the history charts (tile-relative, tile pad = 0). */
 #define PX 20              /* left margin */
 #define PW 400             /* plot width  */
-#define PC_Y 108           /* price chart top */
-#define PC_H 140           /* price chart height */
-#define DM_Y 300           /* demand chart top */
-#define DM_H 60            /* demand chart height */
+#define PC_Y 64            /* price chart top (gap below the header) */
+#define PC_H 186           /* price chart height */
+#define DM_Y 282           /* demand chart top */
+#define DM_H 64            /* demand chart height */
 
 static struct {
     lv_obj_t *root, *tv, *tile[N_TILES], *dot[N_TILES];
     nem_region_t region;
     bool open;
     /* history tile */
-    lv_obj_t *h_price, *h_arrow, *h_sub;
-    lv_obj_t *hist_chart; lv_chart_series_t *hist_ser;
-    lv_obj_t *peak_dot, *peak_lbl;
-    lv_obj_t *dem_chart; lv_chart_series_t *dem_ser;
+    lv_obj_t *h_sub;                 /* price chart title */
+    lv_obj_t *price_plot;            /* lv_canvas: two-tone price chart, painted once */
+    void *price_cbuf;                /* its PSRAM pixel buffer (freed on close) */
+    lv_obj_t *dem_plot;              /* lv_canvas: demand strip w/ gradient fill */
+    void *dem_cbuf;
+    float pv[NEM_HISTORY_SLOTS];     /* filled price values, in order */
+    int pn; double plo, phi;         /* point count + display range (incl. $0) */
+    lv_obj_t *peak_dot, *peak_lbl, *min_dot, *min_lbl;
     /* mix tile */
     lv_obj_t *mix_sub_mw, *mix_sub_ren;
     lv_obj_t *mix_name[NEM_FUEL_COUNT], *mix_fill[NEM_FUEL_COUNT], *mix_pct[NEM_FUEL_COUNT];
@@ -42,14 +52,6 @@ static const char *const FUEL_NAME[NEM_FUEL_COUNT] = {
 static const uint32_t FUEL_HEX[NEM_FUEL_COUNT] = {
     0x5a5a5a, 0xe0a23b, 0x4a9eff, 0x37d67a, 0xffd23f, 0xb06bff, 0x8a8a92
 };
-
-static lv_color_t price_band(double p)
-{
-    if (p < 0)    return NEM_C_GREEN;
-    if (p > 1000) return NEM_C_RED;
-    if (p > 300)  return NEM_C_AMBER;
-    return NEM_C_BLUE;
-}
 
 static int active_tile(void)
 {
@@ -87,40 +89,175 @@ static void tile_head(lv_obj_t *t, const char *ctx)
 
 /* ===================== Tile 1: intraday history ===================== */
 
+/* Custom price chart: two-tone gradient area fill split at $0 (blue above =
+ * you pay, green below = you're paid), a dashed $0 baseline, and a two-tone line
+ * that flips colour where it crosses zero. lv_chart can't do any of this, so we
+ * draw it ourselves from s.pv[0..pn-1] over the display range [s.plo, s.phi].
+ *
+ * Painted ONCE into an lv_canvas per data update (not per frame) — the tileview
+ * then just blits the cached bitmap during the swipe animation, so scroll cost
+ * is independent of chart complexity. (x1,y1,w,h) is the canvas-local plot rect. */
+static void paint_price(lv_layer_t *layer, int x1, int y1, int w, int h)
+{
+    int n = s.pn;
+    if (n < 2 || !layer) return;
+
+    const double lo = s.plo, hi = s.phi;
+    const double span = (hi > lo) ? (hi - lo) : 1.0;
+
+    #define PD_YOF(v) (y1 + (int)(h * (1.0 - ((v) - lo) / span) + 0.5))
+    #define PD_XOF(fi) (x1 + (int)((double)w * (fi) / (n - 1) + 0.5))
+    const int yzero = PD_YOF(0.0);
+    const int ybot = y1 + h;
+
+    /* ---- two-tone gradient area fill, one thin column at a time ---- */
+    lv_draw_rect_dsc_t fd; lv_draw_rect_dsc_init(&fd);
+    fd.bg_opa = LV_OPA_COVER;
+    fd.border_opa = fd.outline_opa = fd.shadow_opa = LV_OPA_TRANSP;
+    fd.bg_grad.dir = LV_GRAD_DIR_VER;
+    fd.bg_grad.stops_count = 2;
+    const int FILL_STEP = 4;   /* wider columns = fewer gradient draws; the crisp
+                                * line on top hides the coarser fill top edge */
+    const int TOPB = 0x62;   /* blue fill opacity at plot top   */
+    const int BOTG = 0x5a;   /* green fill opacity at plot floor */
+    for (int cx = 0; cx < w; cx += FILL_STEP) {
+        double fi = (double)cx * (n - 1) / w;
+        int i = (int)fi; if (i > n - 2) i = n - 2;
+        double v = s.pv[i] + (fi - i) * (s.pv[i + 1] - s.pv[i]);
+        int yv = PD_YOF(v);
+        lv_area_t col = { x1 + cx, 0, x1 + cx + FILL_STEP - 1, 0 };
+        if (v >= 0) {
+            if (yv >= yzero) continue;
+            col.y1 = yv; col.y2 = yzero;
+            int oTop = (yzero > y1) ? TOPB * (yzero - yv) / (yzero - y1) : TOPB;
+            fd.bg_grad.stops[0].color = NEM_C_BLUE; fd.bg_grad.stops[0].opa = (lv_opa_t)oTop; fd.bg_grad.stops[0].frac = 0;
+            fd.bg_grad.stops[1].color = NEM_C_BLUE; fd.bg_grad.stops[1].opa = 0;              fd.bg_grad.stops[1].frac = 255;
+        } else {
+            if (yv <= yzero) continue;
+            col.y1 = yzero; col.y2 = yv;
+            int oBot = (ybot > yzero) ? BOTG * (yv - yzero) / (ybot - yzero) : BOTG;
+            fd.bg_grad.stops[0].color = NEM_C_GREEN; fd.bg_grad.stops[0].opa = 0;              fd.bg_grad.stops[0].frac = 0;
+            fd.bg_grad.stops[1].color = NEM_C_GREEN; fd.bg_grad.stops[1].opa = (lv_opa_t)oBot; fd.bg_grad.stops[1].frac = 255;
+        }
+        fd.bg_color = fd.bg_grad.stops[0].color;
+        lv_draw_rect(layer, &fd, &col);
+    }
+
+    /* ---- dashed $0 baseline ---- */
+    lv_draw_line_dsc_t zd; lv_draw_line_dsc_init(&zd);
+    zd.color = lv_color_hex(0x4a4a52); zd.width = 1; zd.opa = LV_OPA_COVER;
+    zd.dash_width = 3; zd.dash_gap = 3;
+    zd.p1.x = x1; zd.p1.y = yzero; zd.p2.x = x1 + w; zd.p2.y = yzero;
+    lv_draw_line(layer, &zd);
+
+    /* ---- two-tone price line, split at each zero crossing ---- */
+    lv_draw_line_dsc_t ld; lv_draw_line_dsc_init(&ld);
+    ld.width = 3; ld.opa = LV_OPA_COVER; ld.round_start = ld.round_end = 0;
+    for (int i = 0; i < n - 1; i++) {
+        double v0 = s.pv[i], v1 = s.pv[i + 1];
+        int x0 = PD_XOF(i), xa = PD_XOF(i + 1);
+        int y0 = PD_YOF(v0), ya = PD_YOF(v1);
+        if ((v0 >= 0) == (v1 >= 0)) {
+            ld.color = (v0 >= 0) ? NEM_C_BLUE : NEM_C_GREEN;
+            ld.p1.x = x0; ld.p1.y = y0; ld.p2.x = xa; ld.p2.y = ya;
+            lv_draw_line(layer, &ld);
+        } else {
+            double f = v0 / (v0 - v1);   /* fraction along segment where v == 0 */
+            int xc = x1 + (int)((double)w * (i + f) / (n - 1) + 0.5);
+            ld.color = (v0 >= 0) ? NEM_C_BLUE : NEM_C_GREEN;
+            ld.p1.x = x0; ld.p1.y = y0; ld.p2.x = xc; ld.p2.y = yzero;
+            lv_draw_line(layer, &ld);
+            ld.color = (v1 >= 0) ? NEM_C_BLUE : NEM_C_GREEN;
+            ld.p1.x = xc; ld.p1.y = yzero; ld.p2.x = xa; ld.p2.y = ya;
+            lv_draw_line(layer, &ld);
+        }
+    }
+    #undef PD_YOF
+    #undef PD_XOF
+}
+
+/* Demand strip: a grey line with a soft grey gradient fill fading down to the
+ * plot floor. Painted into its own canvas from s.pv-parallel demand values. */
+static void paint_demand(lv_layer_t *layer, int x1, int y1, int w, int h,
+                         const float *dv, int n, double lo, double hi)
+{
+    if (n < 2 || !layer) return;
+    const double span = (hi > lo) ? (hi - lo) : 1.0;
+    #define DD_YOF(v) (y1 + (int)(h * (1.0 - ((v) - lo) / span) + 0.5))
+    #define DD_XOF(i) (x1 + (int)((double)w * (i) / (n - 1) + 0.5))
+    const int ybot = y1 + h;
+
+    lv_draw_rect_dsc_t fd; lv_draw_rect_dsc_init(&fd);
+    fd.bg_opa = LV_OPA_COVER;
+    fd.border_opa = fd.outline_opa = fd.shadow_opa = LV_OPA_TRANSP;
+    fd.bg_grad.dir = LV_GRAD_DIR_VER;
+    fd.bg_grad.stops_count = 2;
+    const int FILL_STEP = 4, TOP = 0x50;   /* grey fill opacity near the line */
+    for (int cx = 0; cx < w; cx += FILL_STEP) {
+        double fi = (double)cx * (n - 1) / w;
+        int i = (int)fi; if (i > n - 2) i = n - 2;
+        double v = dv[i] + (fi - i) * (dv[i + 1] - dv[i]);
+        int yv = DD_YOF(v);
+        if (yv >= ybot) continue;
+        int oTop = TOP * (ybot - yv) / (h > 0 ? h : 1);
+        fd.bg_grad.stops[0].color = NEM_C_MUTED; fd.bg_grad.stops[0].opa = (lv_opa_t)oTop; fd.bg_grad.stops[0].frac = 0;
+        fd.bg_grad.stops[1].color = NEM_C_MUTED; fd.bg_grad.stops[1].opa = 0;              fd.bg_grad.stops[1].frac = 255;
+        fd.bg_color = NEM_C_MUTED;
+        lv_area_t col = { x1 + cx, yv, x1 + cx + FILL_STEP - 1, ybot };
+        lv_draw_rect(layer, &fd, &col);
+    }
+
+    lv_draw_line_dsc_t ld; lv_draw_line_dsc_init(&ld);
+    ld.color = NEM_C_MUTED; ld.width = 2; ld.opa = LV_OPA_COVER;
+    for (int i = 0; i < n - 1; i++) {
+        ld.p1.x = DD_XOF(i);     ld.p1.y = DD_YOF(dv[i]);
+        ld.p2.x = DD_XOF(i + 1); ld.p2.y = DD_YOF(dv[i + 1]);
+        lv_draw_line(layer, &ld);
+    }
+    #undef DD_YOF
+    #undef DD_XOF
+}
+
+/* Place a marker dot at (px,py) with its label to the side — right if the dot
+ * sits in the left half of the plot, else left — so it never sits on the line. */
+static void place_marker(lv_obj_t *dot, lv_obj_t *lbl, int px, int py)
+{
+    lv_obj_set_pos(dot, px - 4, py - 4);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(lbl);
+    int lw = lv_obj_get_width(lbl), lh = lv_obj_get_height(lbl);
+    int lx = (px < PX + PW / 2) ? (px + 9) : (px - 9 - lw);
+    if (lx < PX) lx = PX;
+    if (lx > PX + PW - lw) lx = PX + PW - lw;
+    int ly = py - lh / 2;
+    if (ly < PC_Y) ly = PC_Y;
+    if (ly > PC_Y + PC_H - lh) ly = PC_Y + PC_H - lh;
+    lv_obj_set_pos(lbl, lx, ly);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void build_history_tile(lv_obj_t *t)
 {
     char ctx[24]; snprintf(ctx, sizeof ctx, "%s  today", nem_region_name(s.region));
     tile_head(t, ctx);
 
-    lv_obj_t *now = mk_label(t, &lv_font_montserrat_18, NEM_C_MUTED);
-    lv_label_set_text(now, "now");
-    lv_obj_align(now, LV_ALIGN_TOP_LEFT, PX, 26);
-
-    s.h_price = mk_label(t, &lv_font_montserrat_48, NEM_C_WHITE);
-    lv_label_set_text(s.h_price, "$--");
-    lv_obj_align(s.h_price, LV_ALIGN_TOP_LEFT, PX + 54, 22);
-
-    s.h_arrow = mk_label(t, &lv_font_montserrat_24, NEM_C_GREEN);
-    lv_label_set_text(s.h_arrow, "");
-    lv_obj_align(s.h_arrow, LV_ALIGN_TOP_LEFT, PX + 150, 40);
-
-    s.h_sub = mk_label(t, &lv_font_montserrat_14, NEM_C_MUTED);
+    s.h_sub = mk_label(t, &lv_font_montserrat_14, NEM_C_WHITE);
     lv_label_set_text(s.h_sub, "Price $/MWh  midnight to now");
-    lv_obj_align(s.h_sub, LV_ALIGN_TOP_LEFT, PX, 86);
+    lv_obj_align(s.h_sub, LV_ALIGN_TOP_LEFT, PX, 26);
 
-    lv_obj_t *c = lv_chart_create(t);
-    lv_obj_set_pos(c, PX, PC_Y);
-    lv_obj_set_size(c, PW, PC_H);
-    lv_obj_set_style_pad_all(c, 0, 0);
-    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(c, 0, 0);
-    lv_chart_set_type(c, LV_CHART_TYPE_LINE);
-    lv_chart_set_div_line_count(c, 3, 0);
-    lv_obj_set_style_line_width(c, 3, LV_PART_ITEMS);
-    lv_obj_set_style_size(c, 0, 0, LV_PART_INDICATOR);   /* hide point markers */
-    lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
-    s.hist_ser = lv_chart_add_series(c, NEM_C_BLUE, LV_CHART_AXIS_PRIMARY_Y);
-    s.hist_chart = c;
+    /* price chart is an lv_canvas (PSRAM-backed) painted on data updates only */
+    lv_obj_t *pp = lv_canvas_create(t);
+    lv_obj_set_pos(pp, PX, PC_Y);
+    lv_obj_clear_flag(pp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(pp, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(pp, LV_OBJ_FLAG_EVENT_BUBBLE);
+    s.price_cbuf = heap_caps_malloc(
+        LV_CANVAS_BUF_SIZE(PW, PC_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
+    if (s.price_cbuf) {
+        lv_canvas_set_buffer(pp, s.price_cbuf, PW, PC_H, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_fill_bg(pp, NEM_C_BG, LV_OPA_COVER);
+    }
+    s.price_plot = pp;
 
     /* peak marker (positioned in render) */
     s.peak_dot = lv_obj_create(t);
@@ -134,96 +271,142 @@ static void build_history_tile(lv_obj_t *t)
     lv_label_set_text(s.peak_lbl, "");
     lv_obj_add_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN);
 
+    /* min marker (green = cheapest / most-negative point) */
+    s.min_dot = lv_obj_create(t);
+    lv_obj_remove_style_all(s.min_dot);
+    lv_obj_set_size(s.min_dot, 8, 8);
+    lv_obj_set_style_radius(s.min_dot, 4, 0);
+    lv_obj_set_style_bg_color(s.min_dot, NEM_C_GREEN, 0);
+    lv_obj_set_style_bg_opa(s.min_dot, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s.min_dot, LV_OBJ_FLAG_HIDDEN);
+    s.min_lbl = mk_label(t, &lv_font_montserrat_14, NEM_C_GREEN);
+    lv_label_set_text(s.min_lbl, "");
+    lv_obj_add_flag(s.min_lbl, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_t *dl = mk_label(t, &lv_font_montserrat_14, NEM_C_MUTED);
     lv_label_set_text(dl, "Demand MW");
     lv_obj_align(dl, LV_ALIGN_TOP_LEFT, PX, DM_Y - 22);
 
-    lv_obj_t *d = lv_chart_create(t);
+    /* demand strip is also a canvas (gradient fill + line, painted once) */
+    lv_obj_t *d = lv_canvas_create(t);
     lv_obj_set_pos(d, PX, DM_Y);
-    lv_obj_set_size(d, PW, DM_H);
-    lv_obj_set_style_pad_all(d, 0, 0);
-    lv_obj_set_style_bg_opa(d, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(d, 0, 0);
-    lv_chart_set_type(d, LV_CHART_TYPE_LINE);
-    lv_chart_set_div_line_count(d, 0, 0);
-    lv_obj_set_style_line_width(d, 2, LV_PART_ITEMS);
-    lv_obj_set_style_size(d, 0, 0, LV_PART_INDICATOR);
+    lv_obj_clear_flag(d, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-    s.dem_ser = lv_chart_add_series(d, NEM_C_MUTED, LV_CHART_AXIS_PRIMARY_Y);
-    s.dem_chart = d;
+    lv_obj_add_flag(d, LV_OBJ_FLAG_EVENT_BUBBLE);
+    s.dem_cbuf = heap_caps_malloc(
+        LV_CANVAS_BUF_SIZE(PW, DM_H, 16, LV_DRAW_BUF_STRIDE_ALIGN), MALLOC_CAP_SPIRAM);
+    if (s.dem_cbuf) {
+        lv_canvas_set_buffer(d, s.dem_cbuf, PW, DM_H, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_fill_bg(d, NEM_C_BG, LV_OPA_COVER);
+    }
+    s.dem_plot = d;
+}
+
+/* Downsample n raw (price,demand) samples into <=RENDER_MAX buckets. Per bucket
+ * we keep the sample with the largest |price| so spikes and negative dips (the
+ * whole story) survive — a plain average would flatten them out. Demand rides
+ * along on the chosen index (it's a smooth secondary strip). Returns out count. */
+static int decimate(const float *pin, const float *din, int n,
+                    float *pout, float *dout)
+{
+    if (n <= RENDER_MAX) {
+        for (int i = 0; i < n; i++) { pout[i] = pin[i]; dout[i] = din[i]; }
+        return n;
+    }
+    for (int b = 0; b < RENDER_MAX; b++) {
+        int s0 = (int)((long)b * n / RENDER_MAX);
+        int s1 = (int)((long)(b + 1) * n / RENDER_MAX);
+        if (s1 <= s0) s1 = s0 + 1;
+        int best = s0; float bestmag = -1.0f;
+        for (int i = s0; i < s1 && i < n; i++) {
+            float mag = pin[i] < 0 ? -pin[i] : pin[i];
+            if (mag > bestmag) { bestmag = mag; best = i; }
+        }
+        pout[b] = pin[best]; dout[b] = din[best];
+    }
+    return RENDER_MAX;
 }
 
 static void render_history(void)
 {
     const nem_region_history_t *h = nem_history_of(s.region);
-    const nem_snapshot_t *snap = ui_dashboard_snapshot();
-
-    /* headline current price from the live snapshot */
-    if (snap && snap->regions[s.region].valid) {
-        double p = snap->regions[s.region].price;
-        lv_label_set_text_fmt(s.h_price, "$%d", (int)(p + (p < 0 ? -0.5 : 0.5)));
-        lv_obj_set_style_text_color(s.h_price, price_band(p), 0);
-    }
     if (!h) return;
 
-    /* gather filled price + demand, track peak */
-    double plo = 1e12, phi = -1e12, dlo = 1e12, dhi = -1e12;
-    int n = 0, peak_idx = -1; double peak_val = -1e12;
+    /* gather filled price + demand into raw buffers (static: keep off the
+     * LVGL task stack) */
+    static float rawp[NEM_HISTORY_SLOTS], rawd[NEM_HISTORY_SLOTS];
+    int nn = 0;
     for (int i = 0; i < NEM_HISTORY_SLOTS; i++) {
         if (!h->filled[i]) continue;
-        double p = h->price[i], dm = h->demand[i];
-        if (p < plo) plo = p;
-        if (p > phi) { phi = p; peak_val = p; peak_idx = n; }
+        rawp[nn] = (float)h->price[i];
+        rawd[nn] = (float)h->demand[i];
+        nn++;
+    }
+
+    if (nn == 0) {
+        s.pn = 0;
+        if (s.price_cbuf) lv_canvas_fill_bg(s.price_plot, NEM_C_BG, LV_OPA_COVER);
+        if (s.dem_cbuf)   lv_canvas_fill_bg(s.dem_plot,   NEM_C_BG, LV_OPA_COVER);
+        lv_obj_add_flag(s.peak_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s.min_dot,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s.min_lbl,  LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    /* decimate to a render-friendly point count (keeps spikes) */
+    static float demd[RENDER_MAX];
+    s.pn = decimate(rawp, rawd, nn, s.pv, demd);
+
+    /* range from the decimated points, extended to always include $0 so the
+     * baseline shows and negative prices visibly dip below it; track peak+min */
+    double plo = 1e12, phi = -1e12, dlo = 1e12, dhi = -1e12;
+    int peak_idx = -1, min_idx = -1; double peak_val = -1e12, min_val = 1e12;
+    for (int i = 0; i < s.pn; i++) {
+        double p = s.pv[i], dm = demd[i];
+        if (p > phi) { phi = p; peak_val = p; peak_idx = i; }
+        if (p < plo) { plo = p; min_val  = p; min_idx  = i; }
         if (dm < dlo) dlo = dm;
         if (dm > dhi) dhi = dm;
-        n++;
     }
-
-    /* trend arrow: compare last two filled price samples (down=green good) */
-    if (n >= 2) {
-        double a = 0, b = 0; int k = 0;
-        for (int i = 0; i < NEM_HISTORY_SLOTS; i++) {
-            if (!h->filled[i]) continue;
-            a = b; b = h->price[i]; k++;
-        }
-        (void)k;
-        if (b < a)      { lv_label_set_text(s.h_arrow, LV_SYMBOL_DOWN); lv_obj_set_style_text_color(s.h_arrow, NEM_C_GREEN, 0); }
-        else if (b > a) { lv_label_set_text(s.h_arrow, LV_SYMBOL_UP);   lv_obj_set_style_text_color(s.h_arrow, NEM_C_RED, 0); }
-        else            { lv_label_set_text(s.h_arrow, ""); }
-    } else {
-        lv_label_set_text(s.h_arrow, "");
-    }
-
-    if (n == 0) { lv_chart_set_point_count(s.hist_chart, 1); lv_obj_add_flag(s.peak_dot, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN); return; }
+    if (plo > 0) plo = 0;   /* display range always spans $0 */
+    if (phi < 0) phi = 0;
     if (phi <= plo) phi = plo + 1;
     if (dhi <= dlo) dhi = dlo + 1;
+    s.plo = plo; s.phi = phi;
 
-    lv_chart_set_axis_range(s.hist_chart, LV_CHART_AXIS_PRIMARY_Y, (int32_t)plo, (int32_t)phi);
-    lv_chart_set_point_count(s.hist_chart, (uint32_t)n);
-    lv_chart_set_axis_range(s.dem_chart, LV_CHART_AXIS_PRIMARY_Y, (int32_t)dlo, (int32_t)dhi);
-    lv_chart_set_point_count(s.dem_chart, (uint32_t)n);
-    int idx = 0;
-    for (int i = 0; i < NEM_HISTORY_SLOTS; i++) {
-        if (!h->filled[i]) continue;
-        lv_chart_set_series_value_by_id(s.hist_chart, s.hist_ser, idx, (int32_t)(h->price[i] + 0.5));
-        lv_chart_set_series_value_by_id(s.dem_chart, s.dem_ser, idx, (int32_t)(h->demand[i] + 0.5));
-        idx++;
+    /* paint both charts into their canvases once (cheap blit thereafter) */
+    if (s.price_cbuf) {
+        lv_canvas_fill_bg(s.price_plot, NEM_C_BG, LV_OPA_COVER);
+        lv_layer_t layer;
+        lv_canvas_init_layer(s.price_plot, &layer);
+        paint_price(&layer, 0, 0, PW, PC_H);
+        lv_canvas_finish_layer(s.price_plot, &layer);
     }
-    lv_obj_set_style_line_color(s.hist_chart, price_band(phi), LV_PART_ITEMS);
+    if (s.dem_cbuf) {
+        lv_canvas_fill_bg(s.dem_plot, NEM_C_BG, LV_OPA_COVER);
+        lv_layer_t layer;
+        lv_canvas_init_layer(s.dem_plot, &layer);
+        paint_demand(&layer, 0, 0, PW, DM_H, demd, s.pn, dlo, dhi);
+        lv_canvas_finish_layer(s.dem_plot, &layer);
+    }
 
-    /* peak marker: position over the price plot (tile-relative coords) */
-    if (n >= 2 && peak_idx >= 0) {
-        int px = PX + (int)((long)PW * peak_idx / (n - 1));
-        int py = PC_Y + (int)(PC_H * (1.0 - (peak_val - plo) / (phi - plo)));
-        lv_obj_set_pos(s.peak_dot, px - 4, py - 4);
-        lv_obj_clear_flag(s.peak_dot, LV_OBJ_FLAG_HIDDEN);
+    /* peak (red) + min (green) markers, labels placed to the side of the dot */
+    if (s.pn >= 2) {
+        int ppx = PX + (int)((long)PW * peak_idx / (s.pn - 1));
+        int ppy = PC_Y + (int)(PC_H * (1.0 - (peak_val - plo) / (phi - plo)));
         lv_label_set_text_fmt(s.peak_lbl, "$%d peak", (int)(peak_val + 0.5));
-        int lx = px - 24; if (lx < PX) lx = PX; if (lx > PX + PW - 60) lx = PX + PW - 60;
-        lv_obj_set_pos(s.peak_lbl, lx, py - 22 < PC_Y ? PC_Y : py - 22);
-        lv_obj_clear_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN);
+        place_marker(s.peak_dot, s.peak_lbl, ppx, ppy);
+
+        int mpx = PX + (int)((long)PW * min_idx / (s.pn - 1));
+        int mpy = PC_Y + (int)(PC_H * (1.0 - (min_val - plo) / (phi - plo)));
+        lv_label_set_text_fmt(s.min_lbl, "$%d min", (int)(min_val + (min_val < 0 ? -0.5 : 0.5)));
+        place_marker(s.min_dot, s.min_lbl, mpx, mpy);
     } else {
         lv_obj_add_flag(s.peak_dot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.peak_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s.min_dot,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s.min_lbl,  LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -253,6 +436,7 @@ static void build_mix_tile(lv_obj_t *t)
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(row, 10, 0);
+        lv_obj_set_style_pad_right(row, 28, 0);   /* keep the % clear of the edge */
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *nm = mk_label(row, &lv_font_montserrat_16, lv_color_hex(0xc9c9d2));
@@ -392,7 +576,9 @@ static void render_ic(void)
 
 static void close_drill(void)
 {
-    if (s.root) { lv_obj_del(s.root); s.root = NULL; }
+    if (s.root) { lv_obj_del(s.root); s.root = NULL; }   /* deletes the canvas objs first */
+    if (s.price_cbuf) { heap_caps_free(s.price_cbuf); s.price_cbuf = NULL; }
+    if (s.dem_cbuf)   { heap_caps_free(s.dem_cbuf);   s.dem_cbuf = NULL; }
     s.open = false;
 }
 

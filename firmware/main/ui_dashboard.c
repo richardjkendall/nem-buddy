@@ -10,6 +10,9 @@
 static const uint32_t k_fuel_hex[NEM_FUEL_COUNT] = {
     0x5a5a5a, 0xe0a23b, 0x4a9eff, 0x37d67a, 0xffd23f, 0xb06bff, 0x8a8a92
 };
+static const char *const k_fuel_name[NEM_FUEL_COUNT] = {
+    "Coal", "Gas", "Hydro", "Wind", "Solar", "Battery", "Other"
+};
 
 static struct {
     lv_obj_t *region, *price, *unit, *demand_val, *renew_val;
@@ -125,6 +128,38 @@ void ui_dashboard_create(lv_obj_t *parent)
         lv_obj_set_style_bg_color(seg, lv_color_hex(k_fuel_hex[i]), 0);
         lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
         d.seg[i] = seg;
+    }
+
+    /* Legend under the mix bar: colour swatch + fuel name (static reference) */
+    lv_obj_t *legend = lv_obj_create(parent);
+    lv_obj_remove_style_all(legend);
+    lv_obj_set_size(legend, 440, 44);
+    lv_obj_align(legend, LV_ALIGN_TOP_MID, 0, 186);
+    lv_obj_set_flex_flow(legend, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(legend, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(legend, 12, 0);
+    lv_obj_set_style_pad_row(legend, 4, 0);
+    lv_obj_clear_flag(legend, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < NEM_FUEL_COUNT; i++) {
+        lv_obj_t *item = lv_obj_create(legend);
+        lv_obj_remove_style_all(item);
+        lv_obj_set_size(item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(item, 5, 0);
+        lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *sw = lv_obj_create(item);
+        lv_obj_remove_style_all(sw);
+        lv_obj_set_size(sw, 10, 10);
+        lv_obj_set_style_radius(sw, 3, 0);
+        lv_obj_set_style_bg_color(sw, lv_color_hex(k_fuel_hex[i]), 0);
+        lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, 0);
+
+        lv_obj_t *nm = lv_label_create(item);
+        lv_obj_set_style_text_font(nm, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(nm, lv_color_hex(0xc9c9d2), 0);
+        lv_label_set_text(nm, k_fuel_name[i]);
     }
 
     lv_obj_t *hero_hit = lv_obj_create(parent);
