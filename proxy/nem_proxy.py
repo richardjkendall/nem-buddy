@@ -25,6 +25,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 AEMO_URL = "https://visualisations.aemo.com.au/aemo/apps/api/report/ELEC_NEM_SUMMARY"
 OE_BASE = ("https://api.openelectricity.org.au/v4/data/network/NEM"
            "?metrics=power&primary_grouping=network_region&secondary_grouping=fueltech")
+# Market endpoint carries 5-min price + demand per region (two data blocks, one
+# per metric) — used once/day to backfill today's curve midnight->now.
+OE_MARKET = ("https://api.openelectricity.org.au/v4/market/network/NEM"
+             "?metrics=price&metrics=demand&interval=5m"
+             "&primary_grouping=network_region")
 REGIONS = ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
 FUELS = ["coal", "gas", "hydro", "wind", "solar", "battery", "other"]
 
@@ -133,6 +138,7 @@ HIST_SLOTS = 288   # 5-min slots per day
 # of day (0..287). Persists across device reflashes because it lives here.
 _hist = {rid: {"ph": [None] * HIST_SLOTS, "dh": [None] * HIST_SLOTS} for rid in REGIONS}
 _hist_day = [None]
+_backfilled_day = [None]   # last AEST date we backfilled from OE (once/day)
 
 
 def record_history(settle, aemo):
@@ -158,6 +164,42 @@ def record_history(settle, aemo):
             continue
         _hist[rid]["ph"][slot] = round(a.get("price", 0.0), 1)
         _hist[rid]["dh"][slot] = round(a.get("demand", 0.0))
+
+
+def backfill_history(api_key, day):
+    """One-shot: fill `day`'s per-region 5-min price/demand curve from OE's market
+    endpoint, midnight->now. Fill-only — never overwrites a slot the live poll has
+    already recorded, so live values always win. `day` is an AEST date (from the
+    AEMO settlement clock) so slot mapping matches record_history exactly."""
+    ds = day.strftime("%Y-%m-%dT00:00:00")
+    de = day.strftime("%Y-%m-%dT23:55:00")   # OE clamps to latest available bucket
+    url = OE_MARKET + "&date_start=" + ds + "&date_end=" + de
+    doc = json.loads(_get(url, {"Authorization": "Bearer " + api_key}))
+    field_of = {"price": "ph", "demand": "dh"}
+    filled = 0
+    for blk in doc.get("data", []):
+        field = field_of.get(blk.get("metric"))
+        if not field:
+            continue
+        for series in blk.get("results", []):
+            rid = series.get("columns", {}).get("region")   # key is 'region'
+            if rid not in REGIONS:
+                continue
+            for ts, val in (series.get("data") or []):
+                if val is None:
+                    continue
+                try:
+                    dt = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")  # drop +10:00
+                except (TypeError, ValueError):
+                    continue
+                if dt.date() != day:
+                    continue
+                slot = (dt.hour * 60 + dt.minute) // 5
+                if 0 <= slot < HIST_SLOTS and _hist[rid][field][slot] is None:
+                    _hist[rid][field][slot] = (round(val, 1) if field == "ph"
+                                               else round(val))
+                    filled += 1
+    return filled
 
 
 def _csv(vals):
@@ -210,6 +252,16 @@ def refresh_loop(api_key):
                     _cache["oe_err"] = str(e)
                     print("[proxy] OE fetch error:", e, file=sys.stderr)
             record_history(settle, aemo)   # fold this poll into today's curve
+            # Backfill the rest of today's curve from OE once per day (after
+            # record_history has set _hist_day + reset on rollover). Fill-only.
+            if api_key and _hist_day[0] and _backfilled_day[0] != _hist_day[0]:
+                try:
+                    n = backfill_history(api_key, _hist_day[0])
+                    _backfilled_day[0] = _hist_day[0]
+                    print("[proxy] backfilled %d slots for %s" % (n, _hist_day[0]),
+                          file=sys.stderr)
+                except Exception as e:
+                    print("[proxy] backfill error:", e, file=sys.stderr)
             payload = build_payload(settle, aemo, oe_cache, _hist)
             with _lock:
                 _cache["payload"] = payload
