@@ -40,13 +40,11 @@ esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
 
-    bool secured = auth && auth->key;
+    bool secured = auth && auth->key && auth->device_id && auth->device_id[0];
     if (secured) {
-        char msg[40], b64[45], ctr[24];
-        int mlen = nem_auth_req_message(msg, sizeof msg, auth->counter);
-        hmac_b64(auth->key, (const uint8_t *)msg, (size_t)mlen, b64);
-        snprintf(ctr, sizeof ctr, "%llu", auth->counter);
-        esp_http_client_set_header(c, "X-NEM-Ctr", ctr);
+        char b64[45];
+        hmac_b64(auth->key, (const uint8_t *)NEM_AUTH_REQ_MSG, strlen(NEM_AUTH_REQ_MSG), b64);
+        esp_http_client_set_header(c, "X-NEM-Id", auth->device_id);
         esp_http_client_set_header(c, "X-NEM-Auth", b64);
         esp_http_client_set_header(c, "Accept-Encoding", "identity");
     }
@@ -82,15 +80,16 @@ esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_
 
 bool nem_http_auth_selftest(void)
 {
-    uint8_t key[32];
-    mbedtls_sha256((const unsigned char *)"testsecret", 10, key, 0);
-    char msg[40], mac[45], sig[45];
-    int mlen = nem_auth_req_message(msg, sizeof msg, 42ULL);
-    hmac_b64(key, (const uint8_t *)msg, (size_t)mlen, mac);
+    uint8_t mk[32], dk[32];
+    mbedtls_sha256((const unsigned char *)"testmaster", 10, mk, 0);      /* master_key */
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), mk, 32,
+                    (const uint8_t *)"dev01", 5, dk);                    /* device_key */
+    char mac[45], sig[45];
+    hmac_b64(dk, (const uint8_t *)NEM_AUTH_REQ_MSG, strlen(NEM_AUTH_REQ_MSG), mac);
     const char *body = "{\"t\":\"2026-07-14T00:00:00\",\"regions\":[]}";
-    hmac_b64(key, (const uint8_t *)body, strlen(body), sig);
-    bool ok = ct_eq(mac, "G69StGPYEo1A7d1r9FFqAp8aLV206F0TJN6guGhF8S4=")
-           && ct_eq(sig, "iYW1w5bFInoap2OfScY0Xt082rEedKXacCGM4EZu11g=");
+    hmac_b64(dk, (const uint8_t *)body, strlen(body), sig);
+    bool ok = ct_eq(mac, "AgulWuvI5tPLH16AFjhdorHUgz73oTeShS+VOdQ1vdU=")
+           && ct_eq(sig, "uPGokXyiUFAQFM1FjIK8dW3EGa3Rgm23GDpxFIc+VGk=");
     ESP_LOGI(TAG, "auth self-test: %s", ok ? "PASS" : "FAIL");
     return ok;
 }

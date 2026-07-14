@@ -11,8 +11,7 @@
 #include "nem/config.h"
 #include "nem/history.h"
 #include "ui_drill.h"
-#include "auth_counter.h"
-#include "mbedtls/sha256.h"
+#include "mbedtls/base64.h"
 #include "nem/proxy_auth.h"
 #include <string.h>
 
@@ -33,9 +32,11 @@ static void data_task(void *arg)
         return;
     }
     uint8_t auth_key[32];
-    bool secured = creds.proxy_token[0] != '\0';
-    if (secured)
-        mbedtls_sha256((const unsigned char *)creds.proxy_token, strlen(creds.proxy_token), auth_key, 0);
+    size_t klen = 0;
+    bool secured = creds.device_id[0] != '\0' && creds.proxy_token[0] != '\0'
+        && mbedtls_base64_decode(auth_key, sizeof auth_key, &klen,
+               (const unsigned char *)creds.proxy_token, strlen(creds.proxy_token)) == 0
+        && klen == 32;
     nem_http_auth_selftest();
 
     nem_config_t cfg; nem_config_defaults(&cfg);
@@ -48,7 +49,7 @@ static void data_task(void *arg)
 
     for (;;) {
         int len = 0;
-        nem_auth_t auth = { .key = secured ? auth_key : NULL, .counter = auth_counter_next() };
+        nem_auth_t auth = { .key = secured ? auth_key : NULL, .device_id = secured ? creds.device_id : NULL };
         if (nem_http_get(creds.proxy_url, &auth, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;

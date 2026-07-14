@@ -5,10 +5,11 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-/* key = 32-byte SHA256(token), or key=NULL for LAN mode (no auth, no verify). */
+/* key = 32-byte device key, or key=NULL for LAN mode (no auth, no verify).
+ * device_id is sent as X-NEM-Id; NULL/empty means LAN mode. */
 typedef struct {
-    const uint8_t     *key;
-    unsigned long long counter;
+    const uint8_t *key;
+    const char    *device_id;
 } nem_auth_t;
 
 /* HTTP GET into caller buffer (NUL-terminated). When auth->key is set: signs the
