@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nem-proxy
+  labels: { app: nem-proxy }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # never two pods with divergent in-memory state
+  selector: { matchLabels: { app: nem-proxy } }
+  template:
+    metadata: { labels: { app: nem-proxy } }
+    spec:
+      containers:
+        - name: nem-proxy
+          image: nem-proxy:dev          # replace with your pushed image ref
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: NEM_OE_API_KEY
+              valueFrom: { secretKeyRef: { name: nem-proxy-secrets, key: oe-api-key } }
+            - name: NEM_PROXY_SECRET
+              valueFrom: { secretKeyRef: { name: nem-proxy-secrets, key: proxy-secret } }
+          readinessProbe:
+            httpGet: { path: /nem, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits:   { memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nem-proxy
+spec:
+  selector: { app: nem-proxy }
+  ports: [{ port: 8080, targetPort: 8080 }]
