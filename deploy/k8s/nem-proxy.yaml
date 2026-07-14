@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
         - name: nem-proxy
-          image: int-reg.zz9pza.co/nem-proxy:2   # linux/amd64 (nodes are x86_64)
+          image: nem-proxy:latest   # replace with your registry ref; build --platform linux/amd64 (x86_64 nodes)
           ports: [{ containerPort: 8080 }]
           env:
             - name: NEM_OE_API_KEY
