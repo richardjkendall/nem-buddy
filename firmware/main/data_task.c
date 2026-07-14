@@ -13,12 +13,14 @@
 #include "ui_drill.h"
 #include "auth_counter.h"
 #include "mbedtls/sha256.h"
+#include "nem/proxy_auth.h"
 #include <string.h>
 
 static const char *TAG = "data";
 #define PROXY_BUF_SZ (24 * 1024)   /* holds the intraday history curves too */
 
 static nem_history_t *s_hist;
+static long long s_last_epoch = 0;
 
 static void data_task(void *arg)
 {
@@ -51,6 +53,13 @@ static void data_task(void *arg)
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
+                long long ep = snap.regions[cfg.home_region].settlement_epoch;
+                if (!nem_auth_accept_fresh(ep, s_last_epoch)) {
+                    ESP_LOGW(TAG, "stale/replayed payload (epoch %lld <= %lld) — dropped", ep, s_last_epoch);
+                    vTaskDelay(pdMS_TO_TICKS(60 * 1000));
+                    continue;
+                }
+                s_last_epoch = ep;
                 bsp_display_lock(-1);
                 nem_proxy_parse_history(buf, s_hist);   /* today's curve from the proxy */
                 ui_dashboard_update(&snap, &mix);
