@@ -55,21 +55,24 @@ _cache = {"payload": None, "aemo_err": None, "oe_err": None}
 _lock = threading.Lock()
 
 _secret = os.environ.get("NEM_PROXY_SECRET", "")
-_auth_key = None            # bytes, or None in LAN mode
-_last_ctr = [-1]            # highest accepted request counter (guarded by _lock)
+_master_key = None          # bytes, or None in LAN mode
+_deny = {d.strip() for d in os.environ.get("NEM_PROXY_DENY", "").split(",") if d.strip()}
 
 
-def derive_key(secret):
+def derive_master_key(secret):
     return hashlib.sha256(secret.encode()).digest()
+
+
+def derive_device_key(master_key, device_id):
+    return hmac.new(master_key, device_id.encode(), hashlib.sha256).digest()
 
 
 def sign_body(key, body):
     return base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
 
 
-def verify_request(key, ctr, auth_b64):
-    msg = ("GET /nem\n%d" % ctr).encode()
-    expect = base64.b64encode(hmac.new(key, msg, hashlib.sha256).digest()).decode()
+def verify_request(device_key, auth_b64):
+    expect = base64.b64encode(hmac.new(device_key, b"GET /nem", hashlib.sha256).digest()).decode()
     return hmac.compare_digest(expect, auth_b64 or "")
 
 
@@ -297,18 +300,15 @@ def refresh_loop(api_key):
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if _auth_key is not None:
-            try:
-                ctr = int(self.headers.get("X-NEM-Ctr", ""))
-            except ValueError:
+        device_key = None
+        if _master_key is not None:
+            did = self.headers.get("X-NEM-Id", "")
+            if not did or did in _deny:
                 self.send_response(401); self.end_headers(); return
+            device_key = derive_device_key(_master_key, did)
             auth = self.headers.get("X-NEM-Auth", "")
-            if not verify_request(_auth_key, ctr, auth):
+            if not verify_request(device_key, auth):
                 self.send_response(401); self.end_headers(); return
-            with _lock:
-                if ctr <= _last_ctr[0]:
-                    self.send_response(401); self.end_headers(); return
-                _last_ctr[0] = ctr
         with _lock:
             payload = _cache["payload"]
         if payload is None:
@@ -320,8 +320,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        if _auth_key is not None:
-            self.send_header("X-NEM-Sig", sign_body(_auth_key, body))
+        if _master_key is not None:
+            self.send_header("X-NEM-Sig", sign_body(device_key, body))
             self.send_header("Cache-Control", "no-store, no-transform")
         self.end_headers()
         self.wfile.write(body)
@@ -339,10 +339,10 @@ def main():
     if not api_key:
         print("WARNING: NEM_OE_API_KEY not set; mix will be empty", file=sys.stderr)
 
-    global _auth_key
+    global _master_key
     if _secret:
-        _auth_key = derive_key(_secret)
-        print("[proxy] app-layer auth ENABLED", file=sys.stderr)
+        _master_key = derive_master_key(_secret)
+        print("[proxy] app-layer auth ENABLED (%d device(s) denied)" % len(_deny), file=sys.stderr)
     else:
         print("[proxy] app-layer auth disabled (LAN mode)", file=sys.stderr)
 
