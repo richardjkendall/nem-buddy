@@ -4,10 +4,32 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
+#include "mbedtls/md.h"
+#include "mbedtls/sha256.h"
+#include "mbedtls/base64.h"
+#include "nem/proxy_auth.h"
 
 static const char *TAG = "fetch";
 
-esp_err_t nem_http_get(const char *url, const char *bearer, char *buf, size_t buf_sz, int *out_len)
+/* HMAC-SHA256(key[32], msg) -> base64 (44 chars + NUL) in out (>=45 bytes). */
+static void hmac_b64(const uint8_t key[32], const uint8_t *msg, size_t len, char out[45]) {
+    uint8_t mac[32];
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key, 32, msg, len, mac);
+    size_t olen = 0;
+    mbedtls_base64_encode((unsigned char *)out, 45, &olen, mac, 32);
+    out[olen] = 0;
+}
+
+/* constant-time equality of two NUL-terminated strings of equal expected length */
+static bool ct_eq(const char *a, const char *b) {
+    size_t na = strlen(a), nb = strlen(b);
+    if (na != nb) return false;
+    int d = 0;
+    for (size_t i = 0; i < na; i++) d |= (a[i] ^ b[i]);
+    return d == 0;
+}
+
+esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_t buf_sz, int *out_len)
 {
     esp_http_client_config_t cfg = {
         .url = url,
@@ -17,11 +39,18 @@ esp_err_t nem_http_get(const char *url, const char *bearer, char *buf, size_t bu
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
-    if (bearer) {
-        char hdr[600];
-        snprintf(hdr, sizeof(hdr), "Bearer %s", bearer);
-        esp_http_client_set_header(c, "Authorization", hdr);
+
+    bool secured = auth && auth->key;
+    if (secured) {
+        char msg[40], b64[45], ctr[24];
+        int mlen = nem_auth_req_message(msg, sizeof msg, auth->counter);
+        hmac_b64(auth->key, (const uint8_t *)msg, (size_t)mlen, b64);
+        snprintf(ctr, sizeof ctr, "%llu", auth->counter);
+        esp_http_client_set_header(c, "X-NEM-Ctr", ctr);
+        esp_http_client_set_header(c, "X-NEM-Auth", b64);
+        esp_http_client_set_header(c, "Accept-Encoding", "identity");
     }
+
     esp_err_t err = esp_http_client_open(c, 0);
     if (err != ESP_OK) { esp_http_client_cleanup(c); return err; }
     esp_http_client_fetch_headers(c);
@@ -33,8 +62,35 @@ esp_err_t nem_http_get(const char *url, const char *bearer, char *buf, size_t bu
     }
     buf[total < (int)buf_sz ? total : (int)buf_sz - 1] = 0;
     *out_len = total;
+
+    esp_err_t result = (status == 200) ? ESP_OK : ESP_FAIL;
+    if (result == ESP_OK && secured) {
+        char *got = NULL;
+        esp_http_client_get_header(c, "X-NEM-Sig", &got);
+        char want[45];
+        hmac_b64(auth->key, (const uint8_t *)buf, (size_t)total, want);
+        if (!got || !ct_eq(got, want)) {
+            ESP_LOGW(TAG, "response signature INVALID — rejecting");
+            result = ESP_FAIL;
+        }
+    }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
-    ESP_LOGI(TAG, "GET %s -> %d, %d bytes", url, status, total);
-    return status == 200 ? ESP_OK : ESP_FAIL;
+    ESP_LOGI(TAG, "GET %s -> %d, %d bytes%s", url, status, total, secured ? " (auth)" : "");
+    return result;
+}
+
+bool nem_http_auth_selftest(void)
+{
+    uint8_t key[32];
+    mbedtls_sha256((const unsigned char *)"testsecret", 10, key, 0);
+    char msg[40], mac[45], sig[45];
+    int mlen = nem_auth_req_message(msg, sizeof msg, 42ULL);
+    hmac_b64(key, (const uint8_t *)msg, (size_t)mlen, mac);
+    const char *body = "{\"t\":\"2026-07-14T00:00:00\",\"regions\":[]}";
+    hmac_b64(key, (const uint8_t *)body, strlen(body), sig);
+    bool ok = ct_eq(mac, "G69StGPYEo1A7d1r9FFqAp8aLV206F0TJN6guGhF8S4=")
+           && ct_eq(sig, "iYW1w5bFInoap2OfScY0Xt082rEedKXacCGM4EZu11g=");
+    ESP_LOGI(TAG, "auth self-test: %s", ok ? "PASS" : "FAIL");
+    return ok;
 }

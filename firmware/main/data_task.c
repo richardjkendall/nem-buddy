@@ -11,6 +11,9 @@
 #include "nem/config.h"
 #include "nem/history.h"
 #include "ui_drill.h"
+#include "auth_counter.h"
+#include "mbedtls/sha256.h"
+#include <string.h>
 
 static const char *TAG = "data";
 #define PROXY_BUF_SZ (24 * 1024)   /* holds the intraday history curves too */
@@ -27,7 +30,11 @@ static void data_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    const char *bearer = creds.proxy_token[0] ? creds.proxy_token : NULL;
+    uint8_t auth_key[32];
+    bool secured = creds.proxy_token[0] != '\0';
+    if (secured)
+        mbedtls_sha256((const unsigned char *)creds.proxy_token, strlen(creds.proxy_token), auth_key, 0);
+    nem_http_auth_selftest();
 
     nem_config_t cfg; nem_config_defaults(&cfg);
     char *buf = heap_caps_malloc(PROXY_BUF_SZ, MALLOC_CAP_SPIRAM);
@@ -39,7 +46,8 @@ static void data_task(void *arg)
 
     for (;;) {
         int len = 0;
-        if (nem_http_get(creds.proxy_url, bearer, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
+        nem_auth_t auth = { .key = secured ? auth_key : NULL, .counter = auth_counter_next() };
+        if (nem_http_get(creds.proxy_url, &auth, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {

@@ -13,5 +13,6 @@ idf_component_register(
         "${CORE}/src/alerts.c"
         "${CORE}/src/proxy_client.c"
         "${CORE}/src/provision.c"
+        "${CORE}/src/proxy_auth.c"
     INCLUDE_DIRS "${CORE}/include"
     REQUIRES json)
