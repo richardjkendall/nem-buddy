@@ -4,8 +4,8 @@ metadata:
   name: nem-proxy
   labels: { app: nem-proxy }
 spec:
-  replicas: 1
-  strategy: { type: Recreate }        # never two pods with divergent in-memory state
+  replicas: 1                         # auth is stateless; this cap is an OE-quota choice
+  strategy: { type: Recreate }        # one in-memory payload cache per pod
   selector: { matchLabels: { app: nem-proxy } }
   template:
     metadata: { labels: { app: nem-proxy } }

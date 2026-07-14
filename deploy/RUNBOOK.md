@@ -3,9 +3,11 @@
 ## 1. Secrets
     kubectl create secret generic nem-proxy-secrets \
       --from-literal=oe-api-key='oe_xxx' \
-      --from-literal=proxy-secret='<long-random-passphrase>'
-The same `proxy-secret` value is what you enter in the device's captive-portal
-"Proxy token" field.
+      --from-literal=proxy-secret='<long-random-master-passphrase>'
+`proxy-secret` is the **master** secret. Devices never hold it — each device gets its
+own derived key (see §7). To revoke devices, set `NEM_PROXY_DENY` (comma-separated
+device IDs) on the deployment:
+    kubectl set env deploy/nem-proxy NEM_PROXY_DENY=alice-01,bob-03
 
 ## 2. Image
 Build/push to a registry your cluster can pull, and set `image:` in
@@ -29,10 +31,22 @@ Add to the tunnel config (or a `cloudflare.com` Tunnel → Public Hostname):
 - (Optional) Security → add a rate-limiting rule on the hostname.
 
 ## 6. Verify through Cloudflare
-    curl -s -o /dev/null -w "%{http_code}\n" http://nembuddy.<domain>/nem   # 401 (no auth)
-    # 200 with valid headers (compute X-NEM-Auth with the proxy-secret + a counter)
+    curl -s -o /dev/null -w "%{http_code}\n" http://nembuddy.<domain>/nem   # 401 (no X-NEM-Id)
+    # 200 with valid headers for a provisioned device:
+    AUTH=$(python3 - <<'PY'
+    import hashlib,hmac,base64
+    mk=hashlib.sha256(b"<master-passphrase>").digest()
+    dk=hmac.new(mk,b"<device_id>",hashlib.sha256).digest()
+    print(base64.b64encode(hmac.new(dk,b"GET /nem",hashlib.sha256).digest()).decode())
+    PY
+    )
+    curl -s -D - -o /dev/null "http://nembuddy.<domain>/nem" \
+      -H "X-NEM-Id: <device_id>" -H "X-NEM-Auth: $AUTH" | grep -iE "HTTP/|X-NEM-Sig|location"
 Confirm no 301→https redirect and that `X-NEM-Sig` is present on the 200.
 
-## 7. Device
-Re-provision via the captive portal: proxy URL = `http://nembuddy.<domain>/nem`,
-proxy token = the `proxy-secret`.
+## 7. Device provisioning (per device)
+Derive each device's credential from the master secret:
+    NEM_PROXY_SECRET='<master-passphrase>' python3 proxy/provision_device.py rjk-kitchen
+This prints a `device_id` and a base64 `device_key`. In the device captive portal set:
+proxy URL = `http://nembuddy.<domain>/nem`, Device ID = `rjk-kitchen`, Device key = the
+printed base64 value. Use a unique ID per device.
