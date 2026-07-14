@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "nem/provision.h"
 
-/* Same shape as the parsed form: ssid/password/proxy_url/proxy_token. */
+/* Same shape as the parsed form: ssid/password/proxy_url/proxy_token/device_id. */
 typedef nem_prov_form_t net_creds_t;
 
 /* Load creds from NVS namespace "nem". If NVS has no ssid, seed from secrets.h

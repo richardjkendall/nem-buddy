@@ -6,13 +6,14 @@ void setUp(void) {}
 void tearDown(void) {}
 
 static void test_parse_happy(void) {
-    const char *b = "ssid=MyNet&password=s3cret&proxy_url=http%3A%2F%2F1.2.3.4%3A8080%2Fnem&proxy_token=abc";
+    const char *b = "ssid=MyNet&password=s3cret&proxy_url=http%3A%2F%2F1.2.3.4%3A8080%2Fnem&proxy_token=abc&device_id=dev01";
     nem_prov_form_t f;
     TEST_ASSERT_TRUE(nem_provision_parse_form(b, strlen(b), &f));
     TEST_ASSERT_EQUAL_STRING("MyNet", f.ssid);
     TEST_ASSERT_EQUAL_STRING("s3cret", f.password);
     TEST_ASSERT_EQUAL_STRING("http://1.2.3.4:8080/nem", f.proxy_url);
     TEST_ASSERT_EQUAL_STRING("abc", f.proxy_token);
+    TEST_ASSERT_EQUAL_STRING("dev01", f.device_id);
 }
 
 static void test_parse_plus_is_space(void) {

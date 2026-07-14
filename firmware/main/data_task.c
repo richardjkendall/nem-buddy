@@ -11,11 +11,15 @@
 #include "nem/config.h"
 #include "nem/history.h"
 #include "ui_drill.h"
+#include "mbedtls/base64.h"
+#include "nem/proxy_auth.h"
+#include <string.h>
 
 static const char *TAG = "data";
 #define PROXY_BUF_SZ (24 * 1024)   /* holds the intraday history curves too */
 
 static nem_history_t *s_hist;
+static long long s_last_epoch = 0;
 
 static void data_task(void *arg)
 {
@@ -27,7 +31,13 @@ static void data_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    const char *bearer = creds.proxy_token[0] ? creds.proxy_token : NULL;
+    uint8_t auth_key[32];
+    size_t klen = 0;
+    bool secured = creds.device_id[0] != '\0' && creds.proxy_token[0] != '\0'
+        && mbedtls_base64_decode(auth_key, sizeof auth_key, &klen,
+               (const unsigned char *)creds.proxy_token, strlen(creds.proxy_token)) == 0
+        && klen == 32;
+    nem_http_auth_selftest();
 
     nem_config_t cfg; nem_config_defaults(&cfg);
     char *buf = heap_caps_malloc(PROXY_BUF_SZ, MALLOC_CAP_SPIRAM);
@@ -39,10 +49,18 @@ static void data_task(void *arg)
 
     for (;;) {
         int len = 0;
-        if (nem_http_get(creds.proxy_url, bearer, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
+        nem_auth_t auth = { .key = secured ? auth_key : NULL, .device_id = secured ? creds.device_id : NULL };
+        if (nem_http_get(creds.proxy_url, &auth, buf, PROXY_BUF_SZ, &len) == ESP_OK) {
             nem_snapshot_t snap;
             nem_region_mix_t mix;
             if (nem_proxy_parse(buf, &snap, &mix)) {
+                long long ep = snap.regions[cfg.home_region].settlement_epoch;
+                if (!nem_auth_accept_fresh(ep, s_last_epoch)) {
+                    ESP_LOGW(TAG, "stale/replayed payload (epoch %lld <= %lld) — dropped", ep, s_last_epoch);
+                    vTaskDelay(pdMS_TO_TICKS(60 * 1000));
+                    continue;
+                }
+                s_last_epoch = ep;
                 bsp_display_lock(-1);
                 nem_proxy_parse_history(buf, s_hist);   /* today's curve from the proxy */
                 ui_dashboard_update(&snap, &mix);

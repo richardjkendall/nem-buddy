@@ -27,6 +27,7 @@ add_library(nem_core STATIC
   src/alerts.c
   src/proxy_client.c
   src/provision.c
+  src/proxy_auth.c
 )
 target_include_directories(nem_core PUBLIC include)
 target_link_libraries(nem_core PUBLIC cjson)
@@ -53,3 +54,4 @@ nem_add_test(test_oe_client)
 nem_add_test(test_alerts)
 nem_add_test(test_proxy_client)
 nem_add_test(test_provision)
+nem_add_test(test_proxy_auth)

@@ -37,6 +37,7 @@ bool nem_provision_parse_form(const char *body, size_t len, nem_prov_form_t *out
         { "password",    out->password,    NEM_PROV_PASS_MAX  },
         { "proxy_url",   out->proxy_url,   NEM_PROV_URL_MAX   },
         { "proxy_token", out->proxy_token, NEM_PROV_TOKEN_MAX },
+        { "device_id",   out->device_id,   NEM_PROV_DEVID_MAX },
     };
 
     while (p < end) {
