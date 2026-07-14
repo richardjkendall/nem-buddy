@@ -26,6 +26,7 @@ bool net_creds_load(net_creds_t *out) {
         load_str(h, "pass", out->password,    sizeof out->password);
         load_str(h, "url",  out->proxy_url,   sizeof out->proxy_url);
         load_str(h, "tok",  out->proxy_token, sizeof out->proxy_token);
+        load_str(h, "did",  out->device_id,   sizeof out->device_id);
         nvs_close(h);
     }
     if (out->ssid[0] == '\0') {
@@ -48,6 +49,7 @@ bool net_creds_save(const net_creds_t *c) {
            && nvs_set_str(h, "pass", c->password)    == ESP_OK
            && nvs_set_str(h, "url",  c->proxy_url)   == ESP_OK
            && nvs_set_str(h, "tok",  c->proxy_token) == ESP_OK
+           && nvs_set_str(h, "did",  c->device_id)   == ESP_OK
            && nvs_commit(h)                          == ESP_OK;
     nvs_close(h);
     return ok;

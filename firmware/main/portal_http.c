@@ -85,9 +85,14 @@ static esp_err_t send_form(httpd_req_t *req, const char *err) {
     snprintf(field, sizeof field,
              "<label>Proxy URL</label><input name=proxy_url value='%s'>", ebuf);
     httpd_resp_sendstr_chunk(req, field);
+    html_escape(cur.device_id, ebuf, sizeof ebuf);
+    snprintf(field, sizeof field,
+             "<label>Device ID (optional)</label>"
+             "<input name=device_id value='%s'>", ebuf);
+    httpd_resp_sendstr_chunk(req, field);
     html_escape(cur.proxy_token, ebuf, sizeof ebuf);
     snprintf(field, sizeof field,
-             "<label>Proxy token (optional)</label>"
+             "<label>Device key (base64, optional)</label>"
              "<input name=proxy_token value='%s'>", ebuf);
     httpd_resp_sendstr_chunk(req, field);
     httpd_resp_sendstr_chunk(req, "<button>Save &amp; connect</button></form>");
