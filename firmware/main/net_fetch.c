@@ -1,5 +1,6 @@
 #include "net_fetch.h"
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -29,13 +30,35 @@ static bool ct_eq(const char *a, const char *b) {
     return d == 0;
 }
 
+/* Response-signature capture. esp_http_client_get_header() only returns REQUEST
+ * headers, so the response X-NEM-Sig must be captured via the header event.
+ * Match case-insensitively: an intermediary (e.g. Cloudflare) title-cases it to
+ * "X-Nem-Sig". */
+typedef struct { char sig[45]; bool have; } nem_sig_ctx_t;
+
+static esp_err_t nem_http_event(esp_http_client_event_t *evt) {
+    if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->user_data
+        && evt->header_key && strcasecmp(evt->header_key, "X-NEM-Sig") == 0) {
+        nem_sig_ctx_t *ctx = (nem_sig_ctx_t *)evt->user_data;
+        size_t n = evt->header_value ? strlen(evt->header_value) : 0;
+        if (n > 0 && n < sizeof ctx->sig) {
+            memcpy(ctx->sig, evt->header_value, n + 1);
+            ctx->have = true;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_t buf_sz, int *out_len)
 {
+    nem_sig_ctx_t sctx = { .have = false };
     esp_http_client_config_t cfg = {
         .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 15000,
         .user_agent = "nem-buddy/0.1",
+        .event_handler = nem_http_event,
+        .user_data = &sctx,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
@@ -63,11 +86,9 @@ esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_
 
     esp_err_t result = (status == 200) ? ESP_OK : ESP_FAIL;
     if (result == ESP_OK && secured) {
-        char *got = NULL;
-        esp_http_client_get_header(c, "X-NEM-Sig", &got);
         char want[45];
         hmac_b64(auth->key, (const uint8_t *)buf, (size_t)total, want);
-        if (!got || !ct_eq(got, want)) {
+        if (!sctx.have || !ct_eq(sctx.sig, want)) {
             ESP_LOGW(TAG, "response signature INVALID — rejecting");
             result = ESP_FAIL;
         }
