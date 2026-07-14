@@ -13,7 +13,7 @@ typedef struct {
 } nem_auth_t;
 
 /* HTTP GET into caller buffer (NUL-terminated). When auth->key is set: signs the
- * request (X-NEM-Ctr/X-NEM-Auth) and verifies the response signature (X-NEM-Sig),
+ * request (X-NEM-Id/X-NEM-Auth) and verifies the response signature (X-NEM-Sig),
  * failing closed. Returns ESP_OK only on HTTP 200 AND (LAN mode OR valid sig). */
 esp_err_t nem_http_get(const char *url, const nem_auth_t *auth, char *buf, size_t buf_sz, int *out_len);
 
