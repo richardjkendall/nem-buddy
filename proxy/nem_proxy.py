@@ -302,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         device_key = None
         if _master_key is not None:
-            did = self.headers.get("X-NEM-Id", "")
+            did = self.headers.get("X-NEM-Id", "").strip()
             if not did or did in _deny:
                 self.send_response(401); self.end_headers(); return
             device_key = derive_device_key(_master_key, did)

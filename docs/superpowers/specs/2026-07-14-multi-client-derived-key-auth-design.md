@@ -92,7 +92,11 @@ No `_last_ctr`, no per-device state, no lock needed for auth.
 - **Forged/altered data:** blocked. A MITM cannot compute a valid `X-NEM-Sig` for a
   modified body without `device_key`; the device fails closed on a bad/absent sig.
 - **Stale replayed response:** blocked by the on-device `settlement_epoch` freshness
-  gate (reject any payload strictly older than the last accepted).
+  gate (reject any payload strictly older than the last accepted). Residual:
+  `s_last_epoch` is RAM-only and resets to 0 on reboot, so immediately after a device
+  reboot one previously-captured, validly-signed-for-that-device stale response could
+  be accepted once before the next live poll (newer epoch) supersedes it; impact is
+  bounded (briefly-stale public data, no side effects), an accepted residual.
 - **Replayed request:** possible but harmless — returns the same public data; no side
   effects, no OE-quota cost (quota is time-based).
 - **Unprovisioned access / scraping:** blocked. A party without a valid `device_key`
