@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
         - name: nem-proxy
-          image: nem-proxy:dev          # replace with your pushed image ref
+          image: int-reg.zz9pza.co/nem-proxy:1
           ports: [{ containerPort: 8080 }]
           env:
             - name: NEM_OE_API_KEY
