@@ -15,6 +15,10 @@ This design delivers a **device status screen**: a full-screen LVGL overlay show
 battery, network, device identity and data health, toggled by the **IO18** physical
 button. It is diagnostic, read-only, and has no settings or controls.
 
+**Approved mockup:** `.superpowers/brainstorm/*/content/layout-480.html` (gitignored —
+reproduce via the brainstorming visual companion if needed). Drawn at the true 480×480
+using the `ui_theme.h` palette, with both the healthy and degraded states.
+
 ## Hardware facts
 
 From Waveshare's documentation for this board, plus the user's inspection of the physical
@@ -39,6 +43,11 @@ distinction matters, and Risks restates the open ones:
   ES8311/ES7210 (audio codec / mic ADC).
 - The vendored BSP declares `BSP_CAPS_BUTTONS 0` and exposes **no battery or PMIC API** —
   both the button and the battery need new code.
+- **Panel is 480×480**, per `BSP_LCD_H_RES` / `BSP_LCD_V_RES` in
+  `components/esp32_s3_touch_amoled_2_16/include/bsp/display.h`, with a large corner
+  radius. ⚠️ **The vendored BSP's `README.md` claims 410×502 — that is wrong**; it is the
+  ESP32-S3-Touch-AMOLED-**2.06**'s panel, evidently copy-pasted. Trust `display.h`, not the
+  README. (This error was caught only because the user knew the real figure.)
 
 ## Decisions
 
@@ -70,6 +79,16 @@ distinction matters, and Risks restates the open ones:
    next to the percentage makes a nonsense percentage self-evident rather than silently
    wrong. A voltage→percentage curve in `core/` is the fallback if the gauge proves
    unreliable.
+8. **Layout = 2×2 grid of boxed sections** (approved from mockup, see below). Header strip
+   across the top, then Battery (top-left), Network (top-right), Data health
+   (bottom-left), Device identity (bottom-right). The square panel gives each section a
+   real box rather than a cramped strip, while battery still reads first from type size
+   alone. Rejected a battery-hero layout with identity as a footer: it was the better
+   choice on a *tall* panel, but that preference was an artefact of the wrong 410×502
+   figure and does not survive the correction to 480×480.
+9. **Truncate MAC and proxy URL.** Full values are not legible in a quarter of a 480×480
+   panel. Show the MAC's last three octets (enough to identify a unit among a few) and the
+   proxy host without its `/nem` path. The full values remain available over serial.
 
 ## Components
 
@@ -114,8 +133,14 @@ degrades rather than crashes:
 
 Two hard-won constraints from this board's history, to be honoured from the start:
 
-- **Safe-area inset.** The AMOLED has rounded corners and clips ~20px more on the **right**
-  than the left. Content sits in a safe-area inset with extra padding on the right.
+- **Safe-area inset.** The 480×480 AMOLED has a large corner radius and clips ~20px more on
+  the **right** than the left. Content sits inside an inset of **20 left / 40 right / 20
+  top / 20 bottom**, consistent with the dashboard's `pad_all 20` (440-wide content) and
+  the drill-in's deliberately narrower `PHW 372` history plot. The large radius eats
+  precisely where the 2×2 grid's outer corners sit, so the grid is inset inside a rounded
+  safe area and the boxes are corner-rounded to clear it. **The exact radius is a mockup
+  estimate (~96px) and must be checked on real glass** — it is the most likely detail to
+  need nudging, and is cheap to adjust once running.
 - **No `lv_obj_set_flex_grow()` for the battery bar.** Flex-grow does not size children
   proportionally on this board (a 0-value child rendered wide, producing a wrongly-sized
   dashboard fuel-mix bar). Set an explicit `LV_PCT` width computed from the percentage.
