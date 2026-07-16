@@ -252,7 +252,7 @@ esp_err_t axp2101_read(axp2101_state_t *out);
 
 - [ ] **Step 2: Implement init + read**
 
-Replace the body of `firmware/main/axp2101.c` below the existing `axp2101_scan_log()` (keep the scanner — it stays useful) and add:
+Replace the body of `firmware/main/axp2101.c` below the existing `axp2101_scan_log()` and add the following. **Keep the scanner, and call it from `axp2101_init()` when the chip fails to identify** (shown below) — that keeps it live code rather than an unused function, and means the one failure where you'd want a bus dump prints one automatically.
 
 ```c
 #define REG_STATUS1   0x00
@@ -299,6 +299,7 @@ esp_err_t axp2101_init(void)
                  id, AXP2101_CHIP_ID);
         i2c_master_bus_rm_device(s_dev);
         s_dev = NULL;
+        axp2101_scan_log();   /* the one failure where a bus dump is worth having */
         return ESP_ERR_NOT_FOUND;
     }
 
