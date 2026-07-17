@@ -47,5 +47,7 @@ void buttons_start(button_cb_t on_press)
     };
     ESP_ERROR_CHECK(gpio_config(&cfg));
 
-    xTaskCreatePinnedToCore(button_task, "btn", 3072, NULL, 4, NULL, tskNO_AFFINITY);
+    /* 8192: on_button (ui_status_toggle) runs on this task's stack and now
+     * builds/tears down an entire LVGL overlay under bsp_display_lock(). */
+    xTaskCreatePinnedToCore(button_task, "btn", 8192, NULL, 4, NULL, tskNO_AFFINITY);
 }
