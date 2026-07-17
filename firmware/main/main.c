@@ -5,6 +5,7 @@
 #include "bsp/display.h"
 #include "ui_dashboard.h"
 #include "net_manager.h"
+#include "axp2101.h"
 
 static const char *TAG = "nem-buddy";
 
@@ -18,6 +19,8 @@ void app_main(void)
     bsp_display_lock(-1);
     ui_dashboard_create(lv_screen_active());
     bsp_display_unlock();
+
+    axp2101_scan_log();          /* TEMPORARY: remove in Task 2 */
 
     net_manager_start();
 }
