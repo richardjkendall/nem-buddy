@@ -65,6 +65,7 @@ static lv_obj_t *make_row(lv_obj_t *box, int y, const char *key)
     lv_obj_set_style_text_font(v, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_width(v, 110);
+    lv_label_set_long_mode(v, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(v, BOX_W - 26 - 110, y);
     return v;
 }
@@ -133,8 +134,8 @@ static void refresh(lv_timer_t *t)
     lv_obj_set_style_text_color(s.h_err, h.consec_errors ? NEM_C_RED : NEM_C_WHITE, 0);
 
     long long up = h.uptime_s;
-    if (up < 3600) snprintf(buf, sizeof buf, "%llom %llos", up / 60, up % 60);
-    else           snprintf(buf, sizeof buf, "%lloh %llom", up / 3600, (up % 3600) / 60);
+    if (up < 3600) snprintf(buf, sizeof buf, "%lldm %llds", up / 60, up % 60);
+    else           snprintf(buf, sizeof buf, "%lldh %lldm", up / 3600, (up % 3600) / 60);
     lv_label_set_text(s.h_up, buf);
 }
 
