@@ -29,6 +29,7 @@ add_library(nem_core STATIC
   src/provision.c
   src/proxy_auth.c
   src/battery.c
+  src/timefmt.c
 )
 target_include_directories(nem_core PUBLIC include)
 target_link_libraries(nem_core PUBLIC cjson)
@@ -57,3 +58,4 @@ nem_add_test(test_proxy_client)
 nem_add_test(test_provision)
 nem_add_test(test_proxy_auth)
 nem_add_test(test_battery)
+nem_add_test(test_timefmt)
