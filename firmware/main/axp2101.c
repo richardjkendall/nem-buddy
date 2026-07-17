@@ -144,7 +144,21 @@ esp_err_t axp2101_read(axp2101_state_t *out)
      * repeat of 0x34). The vendor reference driver instead does two discrete
      * single-byte reads -- don't "simplify" this back without re-verifying. */
     if (rd(REG_VBAT_H, v, 2) != ESP_OK) return ESP_FAIL;
-    out->millivolts = (uint16_t)(((v[0] & 0x3F) << 8) | v[1]);
+    uint16_t mv = (uint16_t)(((v[0] & 0x3F) << 8) | v[1]);
+
+    /* Only sanity-check voltage when a cell is actually present: with no
+     * battery connected, 0mV is a legitimate reading (the UI ignores
+     * voltage in that case), so failing closed there would wrongly turn
+     * the normal "no battery" state into a read error. When present, a
+     * value outside a realistic Li-ion range means the ADC-enable write
+     * in axp2101_init() may have failed -- 0x34/0x35 stay I2C-readable
+     * even when the fuel gauge never refreshes them, so a healthy ESP_OK
+     * read can still hand back a frozen or power-on-default value. */
+    if (out->present && (mv < 2500 || mv > 4500)) {
+        ESP_LOGW(TAG, "implausible battery voltage %umV; failing closed", mv);
+        return ESP_FAIL;
+    }
+    out->millivolts = mv;
 
     return ESP_OK;
 }
