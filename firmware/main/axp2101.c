@@ -19,6 +19,10 @@ void axp2101_scan_log(void)
 
     char line[128];
     int n = snprintf(line, sizeof line, "I2C scan:");
+    /* n < (int)sizeof line is re-checked every iteration BEFORE `sizeof line - n`
+     * is evaluated below: snprintf returns the length it would have written, so
+     * n can exceed the buffer, and without this guard the unsigned subtraction
+     * would wrap. Do not drop the bound from the for-condition. */
     for (uint8_t a = 0x08; a < 0x78 && n > 0 && n < (int)sizeof line; a++) {
         if (i2c_master_probe(bus, a, 50) == ESP_OK)
             n += snprintf(line + n, sizeof line - n, " 0x%02X", a);
@@ -71,6 +75,8 @@ static esp_err_t wr(uint8_t reg, uint8_t val)
 
 esp_err_t axp2101_init(void)
 {
+    s_ok = false;
+
     i2c_master_bus_handle_t bus = bsp_i2c_get_handle();
     if (!bus) { ESP_LOGE(TAG, "no BSP I2C bus"); return ESP_ERR_INVALID_STATE; }
 
@@ -96,8 +102,16 @@ esp_err_t axp2101_init(void)
     }
 
     uint8_t adc = 0;
-    if (rd(REG_ADC_EN, &adc, 1) == ESP_OK)
-        wr(REG_ADC_EN, adc | 0x01);      /* battery voltage ADC on */
+    esp_err_t adc_err = rd(REG_ADC_EN, &adc, 1);
+    if (adc_err == ESP_OK) {
+        adc_err = wr(REG_ADC_EN, adc | 0x01);      /* battery voltage ADC on */
+        if (adc_err != ESP_OK)
+            ESP_LOGW(TAG, "ADC enable write failed: %s (voltage reads may be stale)",
+                     esp_err_to_name(adc_err));
+    } else {
+        ESP_LOGW(TAG, "ADC enable read failed: %s (voltage reads may be stale)",
+                 esp_err_to_name(adc_err));
+    }
 
     s_ok = true;
     ESP_LOGI(TAG, "AXP2101 ready");
@@ -117,9 +131,20 @@ esp_err_t axp2101_read(axp2101_state_t *out)
     out->present  = (s1 & 0x08) != 0;
     out->charging = ((s2 >> 5) & 0x03) == 0x01;
 
-    if (rd(REG_PERCENT, &pct, 1) == ESP_OK && pct <= 100) out->percent = pct;
-    if (rd(REG_VBAT_H, v, 2) == ESP_OK)
-        out->millivolts = (uint16_t)(((v[0] & 0x3F) << 8) | v[1]);
+    if (rd(REG_PERCENT, &pct, 1) != ESP_OK) return ESP_FAIL;
+    if (pct > 100) {
+        ESP_LOGW(TAG, "implausible battery percent 0x%02X (%u); failing closed",
+                 pct, pct);
+        return ESP_FAIL;
+    }
+    out->percent = pct;
+
+    /* 2-byte read auto-increments 0x34 -> 0x35 on this chip; hardware-verified
+     * (observed 4139mV = 0x102B proves byte 2 genuinely came from 0x35, not a
+     * repeat of 0x34). The vendor reference driver instead does two discrete
+     * single-byte reads -- don't "simplify" this back without re-verifying. */
+    if (rd(REG_VBAT_H, v, 2) != ESP_OK) return ESP_FAIL;
+    out->millivolts = (uint16_t)(((v[0] & 0x3F) << 8) | v[1]);
 
     return ESP_OK;
 }
