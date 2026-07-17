@@ -1,5 +1,6 @@
 #include "wifi_ctrl.h"
 #include <string.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
@@ -117,4 +118,22 @@ esp_err_t wifi_ctrl_portal_start(const char *ap_ssid, const char *ap_pass,
     }
     ESP_LOGI(TAG, "SoftAP \"%s\" up at 192.168.4.1 (%d APs scanned)", ap_ssid, *scan_n);
     return ESP_OK;
+}
+
+void wifi_ctrl_sta_info(wifi_ctrl_sta_info_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof *out);
+
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return;   /* not associated */
+
+    out->connected = true;
+    out->rssi = ap.rssi;
+    strlcpy(out->ssid, (const char *)ap.ssid, sizeof out->ssid);
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK && ip.ip.addr != 0)
+        snprintf(out->ip, sizeof out->ip, IPSTR, IP2STR(&ip.ip));
 }
