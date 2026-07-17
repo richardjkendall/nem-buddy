@@ -20,7 +20,8 @@ void app_main(void)
     ui_dashboard_create(lv_screen_active());
     bsp_display_unlock();
 
-    axp2101_scan_log();          /* TEMPORARY: remove in Task 2 */
+    if (axp2101_init() != ESP_OK)
+        ESP_LOGW(TAG, "battery monitoring unavailable");
 
     net_manager_start();
 }
