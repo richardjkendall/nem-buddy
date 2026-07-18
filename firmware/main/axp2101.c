@@ -128,8 +128,10 @@ esp_err_t axp2101_read(axp2101_state_t *out)
     if (rd(REG_STATUS1, &s1, 1) != ESP_OK) return ESP_FAIL;
     if (rd(REG_STATUS2, &s2, 1) != ESP_OK) return ESP_FAIL;
 
-    out->present  = (s1 & 0x08) != 0;
-    out->charging = ((s2 >> 5) & 0x03) == 0x01;
+    out->present     = (s1 & 0x08) != 0;
+    out->usb_present = (s1 & 0x20) != 0;   /* PMU_STATUS1 bit5 = VBUS good; observed
+                                            * s1=0x28 while plugged in at full charge */
+    out->charging    = ((s2 >> 5) & 0x03) == 0x01;   /* bits[6:5]: 01=charging */
 
     if (rd(REG_PERCENT, &pct, 1) != ESP_OK) return ESP_FAIL;
     if (pct > 100) {

@@ -8,7 +8,8 @@
 
 typedef struct {
     bool     present;      /* a cell is connected */
-    bool     charging;     /* actively charging */
+    bool     usb_present;  /* external USB/VBUS power is connected */
+    bool     charging;     /* actively drawing charge current */
     uint8_t  percent;      /* 0..100 from the fuel gauge */
     uint16_t millivolts;   /* battery terminal voltage */
 } axp2101_state_t;

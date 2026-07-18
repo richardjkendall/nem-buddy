@@ -12,12 +12,17 @@
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 
-/* Safe area: this panel clips ~20px more on the right than the left. */
-#define SX 20
+/* Safe area. On-glass the earlier 40px right inset left the grid visibly
+ * left-of-centre with unused space on the right, so left/right are now near
+ * balanced; RM is kept a touch larger than SX only as a hedge against the
+ * rounded corners clipping the right column. Confirmed on the device. */
+#define PANEL_W 480
+#define SX 20                                      /* left inset */
+#define RM 26                                      /* right inset */
 #define SY 20
 #define HDR_H 24
 #define GAP 9
-#define BOX_W 205
+#define BOX_W ((PANEL_W - SX - RM - GAP) / 2)      /* two columns fill the safe width */
 #define BOX_H 199
 #define GY (SY + HDR_H + GAP)
 
@@ -91,8 +96,18 @@ static void refresh(lv_timer_t *t)
         lv_obj_set_style_bg_color(s.batt_bar,
             pct <= 15 ? NEM_C_RED : (pct <= 35 ? NEM_C_AMBER : NEM_C_GREEN), 0);
 
-        lv_label_set_text(s.batt_chg, b.charging ? "Charging" : "On battery");
-        lv_obj_set_style_text_color(s.batt_chg, b.charging ? NEM_C_GREEN : NEM_C_MUTED, 0);
+        /* Three states, not two: a full cell on USB reads charging=0 but is
+         * not "on battery". usb_present (VBUS) distinguishes them. */
+        if (b.charging) {
+            lv_label_set_text(s.batt_chg, "Charging");
+            lv_obj_set_style_text_color(s.batt_chg, NEM_C_GREEN, 0);
+        } else if (b.usb_present) {
+            lv_label_set_text(s.batt_chg, "USB power");
+            lv_obj_set_style_text_color(s.batt_chg, NEM_C_GREEN, 0);
+        } else {
+            lv_label_set_text(s.batt_chg, "On battery");
+            lv_obj_set_style_text_color(s.batt_chg, NEM_C_MUTED, 0);
+        }
         snprintf(buf, sizeof buf, "%u.%02u V", b.millivolts / 1000, (b.millivolts % 1000) / 10);
         lv_label_set_text(s.batt_mv, buf);
     } else {
