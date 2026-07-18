@@ -14,5 +14,7 @@ idf_component_register(
         "${CORE}/src/proxy_client.c"
         "${CORE}/src/provision.c"
         "${CORE}/src/proxy_auth.c"
+        "${CORE}/src/battery.c"
+        "${CORE}/src/timefmt.c"
     INCLUDE_DIRS "${CORE}/include"
     REQUIRES json)

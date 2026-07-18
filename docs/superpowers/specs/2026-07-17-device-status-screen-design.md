@@ -160,21 +160,37 @@ file-scope table.
 - **Human UAT (only the user can do this):** with the battery installed, confirm the
   percentage tracks reality and moves when charging vs discharging.
 
-## Risks
+## Findings (implemented & verified — supersedes the pre-build risks)
 
-1. **The PMIC has never been talked to.** A diagnostic probe was built but never produced
-   serial output (its console was misconfigured — it needs `CONFIG_ESP_CONSOLE_UART_DEFAULT`
-   plus `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG`, matching `firmware/sdkconfig`, and
-   the port must be opened *before* pulsing reset). Nothing has been read off the AXP2101
-   on the real board, and its address is assumed rather than observed. **The first
-   implementation step is an I2C bus scan to find the responding addresses, then a chip-ID
-   read at whichever is the AXP2101** — expected `0x34`, but confirm, don't assume.
-2. **Register roles are known; exact addresses are not confirmed.** Battery percentage
-   (~`0xA4`), ADC enable (~`0x30`) and battery voltage (~`0x34`/`0x35`) must be confirmed
-   against the AXP2101 datasheet and the board during implementation, not assumed from
-   this document.
-3. **Fuel gauge accuracy on an uncharacterised cell** may be poor — mitigated by Decision 7
-   (voltage shown alongside) and the `core/` fallback curve.
+1. **PMIC confirmed on real hardware.** An I2C bus scan found the AXP2101 at `0x34`
+   answering chip ID `0x4A` (both previously only assumed). The shared bus also carries
+   `0x18` ES8311 codec, `0x40` ES7210 mic ADC, `0x51` PCF85063 RTC, `0x5A` CST9217 touch,
+   `0x6B` QMI8658 IMU. The scanner is retained and called from `axp2101_init()` on an
+   identify failure, so a bus dump prints exactly when one would be wanted.
+2. **Register map confirmed:** `0x00` status1 (bit 3 present, bit 5 VBUS-good), `0x01`
+   status2 (bits[6:5] charge direction), `0x30` bit 0 ADC enable, `0x34`/`0x35` 14-bit
+   voltage in direct mV (auto-incrementing read, hardware-proven), `0xA4` percent. The
+   driver fails **closed**: any read failure, `percent>100`, or a present cell's voltage
+   outside 2500–4500mV returns `ESP_FAIL`, so the UI shows "n/a" rather than a plausible
+   wrong value.
+3. **Battery has three states, not two.** A full cell on USB reads `charging=0` (standby)
+   yet is not on battery; the UI reads the VBUS bit and shows **Charging / USB power / On
+   battery**. Verified on glass showing "USB power" when plugged in and full.
+4. **Panel resolution & layout:** confirmed 480×480. The safe-area right inset was
+   rebalanced on glass from 40px to 26px (left stays 20) — the original inset left the grid
+   visibly left-of-centre. No corner clipping at the final geometry.
+5. **Fuel-gauge fallback** engages when the gauge reports 0% against a healthy voltage,
+   using the `core/` curve; voltage is shown alongside percent so a bad gauge reading is
+   self-evident.
+
+### Open residual
+
+- The **actively-Charging** state (status2 bits[6:5]==`01`) has not been observed on
+  hardware: it needs a partially-discharged cell on USB, and unplugging USB kills the
+  serial link (power and console share the USB-C port). The VBUS-bit assignment is
+  evidence-backed (only environmental bit set beyond battery-present while plugged) and
+  matches XPowersLib; the on-glass "USB power" ⇄ "On battery" flip when unplugging is its
+  confirmation path.
 
 ## Out of scope
 

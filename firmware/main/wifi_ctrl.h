@@ -27,4 +27,18 @@ esp_err_t wifi_ctrl_sta_connect(const net_creds_t *c, int max_retries);
 esp_err_t wifi_ctrl_portal_start(const char *ap_ssid, const char *ap_pass,
                                  wifi_ctrl_ap_t *scan_out, int *scan_n);
 
+/* Named wifi_ctrl_sta_info_t (not wifi_sta_info_t) — the latter is already a
+ * system typedef in esp_wifi_types_generic.h (AP-mode connected-station info)
+ * and collides at compile time. */
+typedef struct {
+    bool   connected;
+    char   ssid[33];
+    int8_t rssi;
+    char   ip[16];      /* dotted quad, empty when no IP */
+} wifi_ctrl_sta_info_t;
+
+/* Snapshot the STA link. Always fills `out`; sets connected=false and leaves
+ * ssid/ip empty when not associated. Safe to call from any task. */
+void wifi_ctrl_sta_info(wifi_ctrl_sta_info_t *out);
+
 #endif
